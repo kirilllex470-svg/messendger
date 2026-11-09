@@ -211,11 +211,17 @@ const server = http.createServer(function(req, res) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 return res.end(JSON.stringify({ success: false, message: 'Этот позывной уже занят!' }));
             }
-            usersDB[key] = { username: data.username.trim(), password: data.password.trim(), unit: data.unit, approved: false };
+            usersDB[key] = {
+                username: data.username.trim(),
+                password: data.password.trim(),
+                unit: data.unit,
+                approved: false,
+                avatar: '',
+                permissions: { row: false, stream: false, maps: false, archive: false }
+            };
             writeJSON(USERS_FILE, usersDB);
             broadcastWS({ type: 'users_updated' });
-            const nowStr = new Date().toLocaleTimeString().slice(0, 5);
-            broadcastAlert(data.unit, '#38bdf8', nowStr, 'АДМИН', '📝 НОВАЯ ЗАЯВКА НА РЕГИСТРАЦИЮ: Позывной [' + data.username.trim() + '] (' + data.unit + '). Откройте "Пользователи и заявки"!');
+            broadcastAlert(data.unit, '#38bdf8', getServerDateTime(), 'АДМИН', '📝 НОВАЯ ЗАЯВКА НА РЕГИСТРАЦИЮ: Позывной [' + data.username.trim() + '] (' + data.unit + '). Откройте "Пользователи и заявки"!');
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true }));
         });
@@ -241,15 +247,47 @@ const server = http.createServer(function(req, res) {
                 return res.end(JSON.stringify({ success: false, message: '⏳ Заявка еще не одобрена АДМИНОМ!' }));
             }
             res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ success: true, username: u.username, unit: u.unit }));
+            res.end(JSON.stringify({
+                success: true,
+                username: u.username,
+                unit: u.unit,
+                permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
+            }));
         });
     }
+
+    if (req.method === 'GET' && urlPath === '/api/user/me') {
+        const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+        const user = (myUrl.searchParams.get('user') || '').toLowerCase();
+        const u = usersDB[user] || {};
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+        return res.end(JSON.stringify({
+            avatar: u.avatar || '',
+            unit: u.unit || '',
+            permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
+        }));
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/user/avatar') {
+        return readBodyJSON(req, function(err, data) {
+            if (!err && data && data.user && data.avatar) {
+                const k = data.user.trim().toLowerCase();
+                if (!usersDB[k]) usersDB[k] = { username: data.user.trim(), password: '', unit: '', approved: true };
+                usersDB[k].avatar = data.avatar;
+                writeJSON(USERS_FILE, usersDB);
+                broadcastWS({ type: 'users_updated' });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+        });
+    }
+
     if (req.method === 'GET' && urlPath === '/api/admin/users') {
-        const pending = new Array();
-        const approved = new Array();
+        const pending = new Array(), approved = new Array();
         Object.keys(usersDB).forEach(function(k) {
-            const item = { key: k, username: usersDB[k].username, password: usersDB[k].password, unit: usersDB[k].unit || '—' };
-            if (usersDB[k].approved === false) pending.push(item);
+            const u = usersDB[k];
+            const item = { key: k, username: u.username, password: u.password, unit: u.unit || '—', permissions: u.permissions || { row: false, stream: false, maps: false, archive: false } };
+            if (u.approved === false) pending.push(item);
             else approved.push(item);
         });
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
@@ -261,6 +299,10 @@ const server = http.createServer(function(req, res) {
             if (!err && data && data.key && usersDB[data.key]) {
                 if (data.action === 'approve') usersDB[data.key].approved = true;
                 else if (data.action === 'delete') delete usersDB[data.key];
+                else if (data.action === 'set_perm' && data.permName) {
+                    if (!usersDB[data.key].permissions) usersDB[data.key].permissions = { row: false, stream: false, maps: false, archive: false };
+                    usersDB[data.key].permissions[data.permName] = Boolean(data.permVal);
+                }
                 writeJSON(USERS_FILE, usersDB);
                 broadcastWS({ type: 'users_updated' });
             }
@@ -278,6 +320,7 @@ const server = http.createServer(function(req, res) {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(JSON.stringify(archiveHistory));
     }
+
     if (req.method === 'POST' && urlPath === '/upload-map') {
         const chunks = new Array();
         req.on('data', function(chunk) { chunks.push(chunk); });
@@ -463,6 +506,16 @@ const server = http.createServer(function(req, res) {
     });
 });
 
+function getServerDateTime() {
+    const d = new Date(Date.now() + 3 * 3600 * 1000);
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const yyyy = d.getUTCFullYear();
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const min = String(d.getUTCMinutes()).padStart(2, '0');
+    return dd + '.' + mm + '.' + yyyy + ' ' + hh + ':' + min;
+}
+
 function buildChatPreviewItem(name, roomId, myLowerName, myLastReadTime, isGroup) {
     const roomMessages = roomsDB[roomId] || [];
     let lastMsgText = "Нет сообщений", lastMsgTime = "", unreadCount = 0;
@@ -478,6 +531,19 @@ function buildChatPreviewItem(name, roomId, myLowerName, myLastReadTime, isGroup
             if (msg.sender.toLowerCase() !== myLowerName && (msg.timestamp || 0) > myLastReadTime) unreadCount++;
         });
     }
+    const uInfo = !isGroup ? (usersDB[name.toLowerCase()] || {}) : {};
+    return {
+        id: isGroup ? roomId : undefined,
+        name: name,
+        unit: uInfo.unit || '',
+        avatar: uInfo.avatar || '',
+        lastMessage: lastMsgText,
+        time: lastMsgTime,
+        unread: unreadCount,
+        isGroup: isGroup
+    };
+}
+
     return { id: isGroup ? roomId : undefined, name: name, lastMessage: lastMsgText, time: lastMsgTime, unread: unreadCount, isGroup: isGroup };
 }
 function handleMultipartSend(req, res) {
@@ -531,8 +597,7 @@ function saveMultipartChatMsg(fields, fileBuffer, fileExt, originalFileName, res
         fs.writeFileSync(path.join(UPLOADS_DIR, fileName), fileBuffer);
         finalContent = (type === 'file') ? JSON.stringify({ path: '/uploads/' + fileName, name: originalFileName }) : ('/uploads/' + fileName);
     }
-    const now = new Date();
-    const timeStr = now.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const timeStr = getServerDateTime();
     if (!roomsDB[room]) roomsDB[room] = new Array();
     roomsDB[room].push({
         id: crypto.randomBytes(8).toString('hex'),
@@ -573,6 +638,7 @@ function notifyJournalFromMessenger(room, sender, rawContent, type, timeStr) {
         broadcastAlert(sender, '#00a884', timeStr, realTarget, cleanText);
     });
 }
+
 const wss = new WebSocket.Server({ server: server, maxPayload: 20 * 1024 * 1024 });
 
 function broadcastWS(obj) {

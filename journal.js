@@ -47,6 +47,9 @@ let ws = null;
 let currentUser = null;
 let currentCallsign = "";
 let userColor = '#fff';
+let myPermissions = { row: false, stream: false, maps: false, archive: false };
+let myMessengerFriends = new Array();
+let allUsersAvatars = {};
 let currentAlertId = null;
 let currentAlertText = "";
 let currentAlertTarget = "";
@@ -67,16 +70,20 @@ let sirenAudio = null;
 let publicVapidKey = null;
 let deferredPrompt = null;
 
+function getStaticDateTime() {
+    const d = new Date();
+    const dd = String(d.getDate()).padStart(2, '0');
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const yyyy = d.getFullYear();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const min = String(d.getMinutes()).padStart(2, '0');
+    return dd + '.' + mm + '.' + yyyy + ' ' + hh + ':' + min;
+}
+
 const SPLASH_FILES = [
-    "boot/kernel_msb55115.sys",
-    "crypto/cipher_channel_v4.dat",
-    "net/websocket_sync_protocol.dll",
-    "maps/tactical_forest_sectors.db",
-    "auth/unit_credentials_guard.bin",
-    "push/vapid_service_worker.js",
-    "stream/salutejazz_rtc_bridge.mod",
-    "journal/history_storage_engine.json",
-    "audio/siren_emergency_synth.wav",
+    "boot/kernel_msb55115.sys", "crypto/cipher_channel_v4.dat", "net/websocket_sync_protocol.dll",
+    "maps/tactical_forest_sectors.db", "auth/unit_credentials_guard.bin", "push/vapid_service_worker.js",
+    "stream/salutejazz_rtc_bridge.mod", "journal/history_storage_engine.json", "audio/siren_emergency_synth.wav",
     "system/msb55115_ready_state.ok"
 ];
 
@@ -102,6 +109,7 @@ function runSplash() {
         }
     }, 200);
 }
+
 window.addEventListener('beforeinstallprompt', function(e) {
     e.preventDefault();
     deferredPrompt = e;
@@ -591,22 +599,37 @@ function renderNotificationsWindow() {
     const myNotifs = allNotifications.filter(isNotificationVisibleForMe).slice(-10);
     if (myNotifs.length === 0) {
         list.innerHTML = '<div style="color:#64748b; font-size:13px;" id="no-notif-placeholder">Нет уведомлений</div>';
+    } else {
+        myNotifs.forEach(function(notif) {
+            const item = document.createElement('div');
+            item.className = 'notif-item' + (notif.read ? ' read' : '');
+            const statusText = notif.read ? ('✅ ПРОЧИТАНО' + (notif.readBy ? ' (' + notif.readBy + ')' : '')) : '⏳ НЕ ПРОЧИТАНО';
+            item.innerHTML =
+                '<span class="notif-time">' + notif.time + '</span>' +
+                '<span class="notif-sender" style="color:' + (notif.color || '#ef4444') + '">' + notif.sender + '</span>' +
+                '<span class="notif-target">КОМУ: ' + notif.target + '</span>' +
+                '<span class="notif-text">' + notif.text + '</span>' +
+                '<span class="notif-status">' + statusText + '</span>';
+            item.onclick = function() { openMessengerWindow(notif.sender); };
+            list.appendChild(item);
+        });
+        list.scrollTop = list.scrollHeight;
+    }
+    updateBroadcastTicker();
+}
+
+function updateBroadcastTicker() {
+    const ticker = document.getElementById('msg-broadcast-ticker');
+    if (!ticker) return;
+    const allBroadcasts = allNotifications.filter(function(n) { return n && n.target === 'ВСЕМ'; }).slice(-8).reverse();
+    if (allBroadcasts.length === 0) {
+        ticker.innerText = '📢 СВОДКА «ВСЕМ»: Пока нет общих оповещений...';
         return;
     }
-    myNotifs.forEach(function(notif) {
-        const item = document.createElement('div');
-        item.className = 'notif-item' + (notif.read ? ' read' : '');
-        const statusText = notif.read ? ('✅ ПРОЧИТАНО' + (notif.readBy ? ' (' + notif.readBy + ')' : '')) : '⏳ НЕ ПРОЧИТАНО';
-        item.innerHTML =
-            '<span class="notif-time">' + notif.time + '</span>' +
-            '<span class="notif-sender" style="color:' + (notif.color || '#ef4444') + '">' + notif.sender + '</span>' +
-            '<span class="notif-target">КОМУ: ' + notif.target + '</span>' +
-            '<span class="notif-text">' + notif.text + '</span>' +
-            '<span class="notif-status">' + statusText + '</span>';
-        item.onclick = function() { openMessengerWindow(notif.sender); };
-        list.appendChild(item);
+    const parts = allBroadcasts.map(function(n) {
+        return '⚡ [' + (n.time || '') + '] ' + (n.sender || 'АДМИН') + ' ➔ ВСЕМ: ' + n.text;
     });
-    list.scrollTop = list.scrollHeight;
+    ticker.innerText = parts.join('   |   ');
 }
 
 function getAlertsQueue(target) {
@@ -616,6 +639,7 @@ function getAlertsQueue(target) {
     if (typeof raw === 'string') return Array.of({ id: null, text: raw, sender: ADMIN_NAME, readList: new Array() });
     return Array.of(raw);
 }
+
 function connectWS() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     ws = new WebSocket(location.origin.replace(/^http/, 'ws'));
@@ -633,6 +657,7 @@ function connectWS() {
             if (msg.vapidPublicKey) { publicVapidKey = msg.vapidPublicKey; subscribeToWebPush(); }
             if (msg.alerts) { pendingAlerts = msg.alerts; checkAndShowAlerts(false); }
             if (currentUser === ADMIN_NAME) fetchAdminUsersList();
+            refreshMyPermissionsFromServer();
         }
         if (msg.type === 'new_row') {
             appendRow(msg.row);
@@ -646,7 +671,7 @@ function connectWS() {
             fetchMapsFromServer();
             if (!msg.target || msg.target === 'ВСЕМ' || currentUser === ADMIN_NAME || msg.target === currentUser) {
                 const box = document.getElementById('maps-section-box');
-                if (box) box.style.display = 'block';
+                if (box && (currentUser === ADMIN_NAME || myPermissions.maps)) box.style.display = 'block';
             }
         }
         if (msg.type === 'stream_state') {
@@ -655,7 +680,10 @@ function connectWS() {
         }
         if (msg.type === 'users_updated') {
             if (currentUser === ADMIN_NAME) fetchAdminUsersList();
+            refreshMyPermissionsFromServer();
+            if (typeof loadFriendsAndRequests === 'function') loadFriendsAndRequests();
         }
+
         if (msg.type === 'history_cleared') {
             document.getElementById('table-body').innerHTML = '';
             allNotifications = new Array();
@@ -735,24 +763,66 @@ function handleAlertClearedMsg(msg) {
 }
 function populateTargetSelect() {
     const adminSelect = document.getElementById('admin-target');
-    const mapSelect = document.getElementById('map-target-select');
     const miniSelect = document.getElementById('mini-notif-target');
-    [adminSelect, mapSelect, miniSelect].forEach(function(sel) {
+    const mapSelect = document.getElementById('map-target-select');
+
+    [adminSelect, miniSelect].forEach(function(sel) {
         if (!sel) return;
         sel.innerHTML = '';
-        let optAll = document.createElement('option');
-        optAll.value = "ВСЕМ";
-        optAll.innerText = "📢 ВСЕМ ПОДРАЗДЕЛЕНИЯМ";
-        sel.appendChild(optAll);
+        if (currentUser === ADMIN_NAME) {
+            let optAll = document.createElement('option');
+            optAll.value = "ВСЕМ";
+            optAll.innerText = "📢 ВСЕМ ПОДРАЗДЕЛЕНИЯМ (В БЕГУЩУЮ СТРОКУ)";
+            sel.appendChild(optAll);
+        }
+        const onlyFriends = myMessengerFriends.filter(function(f) { return !f.isGroup; });
+        if (onlyFriends.length === 0 && currentUser !== ADMIN_NAME) {
+            let optEmpty = document.createElement('option');
+            optEmpty.value = "";
+            optEmpty.innerText = "👥 Добавьте друзей в Мессенджере для связи";
+            sel.appendChild(optEmpty);
+        } else {
+            onlyFriends.forEach(function(f) {
+                let opt = document.createElement('option');
+                opt.value = f.name;
+                opt.innerText = "👤 Друг: " + f.name + (f.unit ? " [" + f.unit + "]" : "");
+                sel.appendChild(opt);
+            });
+        }
+    });
+
+    if (mapSelect) {
+        mapSelect.innerHTML = '<option value="ВСЕМ">📢 ВСЕМ ПОДРАЗДЕЛЕНИЯМ</option>';
         USERS_CONFIG.forEach(function(u) {
             if (u.name !== currentUser) {
                 let opt = document.createElement('option');
-                opt.value = u.name;
-                opt.innerText = u.name;
-                sel.appendChild(opt);
+                opt.value = u.name; opt.innerText = u.name;
+                mapSelect.appendChild(opt);
             }
         });
-    });
+    }
+}
+
+function applyPermissionsUI() {
+    const isAdmin = (currentUser === ADMIN_NAME);
+    const canRow = isAdmin || (myPermissions && myPermissions.row);
+    const canStream = isAdmin || (myPermissions && myPermissions.stream);
+    const canMaps = isAdmin || (myPermissions && myPermissions.maps);
+    const canArchive = isAdmin || (myPermissions && myPermissions.archive);
+
+    const gridEl = document.getElementById('dynamic-inputs');
+    const sendBtn = document.querySelector('.send-btn');
+    const streamBtn = document.getElementById('stream-main-btn');
+    const mapsBtn = document.getElementById('maps-main-btn');
+    const archBtn = document.querySelector('.archive-main-btn');
+    const notifArchBtn = document.getElementById('notif-archive-btn');
+
+    if (gridEl) gridEl.style.display = canRow ? 'grid' : 'none';
+    if (sendBtn) sendBtn.style.display = canRow ? 'block' : 'none';
+    if (streamBtn) streamBtn.style.display = canStream ? 'block' : 'none';
+    if (mapsBtn) mapsBtn.style.display = canMaps ? 'block' : 'none';
+    if (archBtn) archBtn.style.display = canArchive ? 'block' : 'none';
+    if (notifArchBtn) notifArchBtn.style.display = canArchive ? 'inline-block' : 'none';
 }
 
 function applyUserUI() {
@@ -767,6 +837,7 @@ function applyUserUI() {
     const miniBar = document.getElementById('mini-notif-reply-bar');
     if (miniBar) miniBar.style.display = 'flex';
 
+    applyPermissionsUI();
     populateTargetSelect();
     renderNotificationsWindow();
     renderMapsGrid();
@@ -785,6 +856,7 @@ function applyUserUI() {
     }
     if (typeof syncMessengerAuth === 'function') syncMessengerAuth();
 }
+
 function initApp() {
     runSplash();
     hideAuthMessages();
@@ -896,6 +968,23 @@ function submitRegistration() {
         }
     });
 }
+function refreshMyPermissionsFromServer() {
+    if (!currentCallsign) return;
+    if (currentUser === ADMIN_NAME) {
+        myPermissions = { row: true, stream: true, maps: true, archive: true };
+        applyPermissionsUI();
+        return;
+    }
+    fetch('/api/user/me?user=' + encodeURIComponent(currentCallsign) + '&t=' + Date.now())
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data && data.permissions) {
+                myPermissions = data.permissions;
+                applyPermissionsUI();
+            }
+        }).catch(function() {});
+}
+
 function attemptLogin() {
     unlockMobileFeatures();
     const userIndex = Number(document.getElementById('login-select').value);
@@ -910,13 +999,14 @@ function attemptLogin() {
         return;
     }
 
-    if (pass === unitObj.pass) {
-        completeLoginSuccess(unitObj.name, callsignInput || unitObj.name, unitObj.color);
+    if (unitObj.name === ADMIN_NAME && pass === "551150000" && (!callsignInput || callsignInput.toLowerCase() === "муравей")) {
+        myPermissions = { row: true, stream: true, maps: true, archive: true };
+        completeLoginSuccess(ADMIN_NAME, "муравей", unitObj.color);
         return;
     }
 
     if (!callsignInput) {
-        errEl.innerText = '❌ Укажите ваш Позывной или штатный пароль подразделения!';
+        errEl.innerText = '❌ Введите ваш Позывной и пароль!';
         errEl.style.display = 'block';
         return;
     }
@@ -929,6 +1019,7 @@ function attemptLogin() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.success) {
+            myPermissions = data.permissions || { row: false, stream: false, maps: false, archive: false };
             completeLoginSuccess(unitObj.name, data.username || callsignInput, unitObj.color);
         } else {
             errEl.innerText = '❌ ' + (data.message || 'Неверный пароль или позывной не одобрен');
@@ -951,9 +1042,11 @@ function completeLoginSuccess(unitName, callsign, color) {
     localStorage.setItem('journal_color', userColor);
     localStorage.setItem('chat_username', currentCallsign);
     applyUserUI();
+    refreshMyPermissionsFromServer();
     subscribeToWebPush();
     checkAndShowAlerts(false);
 }
+
 function openAdminUsersModal() {
     if (currentUser !== ADMIN_NAME) return;
     document.getElementById('admin-users-modal').style.display = 'flex';
@@ -962,6 +1055,17 @@ function openAdminUsersModal() {
 
 function closeAdminUsersModal() {
     document.getElementById('admin-users-modal').style.display = 'none';
+}
+
+function renderPermCheckboxes(u) {
+    const p = u.permissions || { row: false, stream: false, maps: false, archive: false };
+    const k = u.key;
+    return '<div class="perm-grid">' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.row ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'row\', this.checked)"> 📤 Запись в журнал</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.stream ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'stream\', this.checked)"> 🎥 Видеострим</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.maps ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'maps\', this.checked)"> 🗺️ Вводные/Карта</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.archive ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'archive\', this.checked)"> 🗂️ Архив</label>' +
+    '</div>';
 }
 
 function fetchAdminUsersList() {
@@ -973,19 +1077,14 @@ function fetchAdminUsersList() {
             const aBox = document.getElementById('admin-approved-list');
             const badge = document.getElementById('pending-count-badge');
             if (!pBox || !aBox) return;
-            pBox.innerHTML = '';
-            aBox.innerHTML = '';
-            const pending = data.pending || new Array();
-            const approved = data.approved || new Array();
-            if (badge) {
-                badge.style.display = pending.length > 0 ? 'inline-block' : 'none';
-                badge.innerText = pending.length;
-            }
+            pBox.innerHTML = ''; aBox.innerHTML = '';
+            const pending = data.pending || new Array(), approved = data.approved || new Array();
+            if (badge) { badge.style.display = pending.length > 0 ? 'inline-block' : 'none'; badge.innerText = pending.length; }
             if (pending.length === 0) pBox.innerHTML = '<div style="color:#64748b;">Нет новых заявок</div>';
             pending.forEach(function(u) {
                 const row = document.createElement('div');
                 row.className = 'user-row-card';
-                row.innerHTML = '<div><b>Позывной:</b> <span style="color:#38bdf8;">' + u.username + '</span> | <b>Подр.:</b> ' + u.unit + ' | <b>Пароль:</b> <code style="color:#facc15;">' + u.password + '</code></div>' +
+                row.innerHTML = '<div style="flex:1;"><div><b>Позывной:</b> <span style="color:#38bdf8;">' + u.username + '</span> | <b>Подр.:</b> ' + u.unit + ' | <b>Пароль:</b> <code style="color:#facc15;">' + u.password + '</code></div>' + renderPermCheckboxes(u) + '</div>' +
                     '<div style="display:flex; gap:6px;"><button class="lb-btn" style="background:#22c55e;" onclick="adminUserAction(\'' + u.key + '\', \'approve\')">✅ Одобрить</button>' +
                     '<button class="lb-btn" style="background:#ef4444;" onclick="adminUserAction(\'' + u.key + '\', \'delete\')">❌ Отклонить</button></div>';
                 pBox.appendChild(row);
@@ -994,11 +1093,19 @@ function fetchAdminUsersList() {
             approved.forEach(function(u) {
                 const row = document.createElement('div');
                 row.className = 'user-row-card';
-                row.innerHTML = '<div><b>' + u.username + '</b> (' + u.unit + ') — Пароль: <code style="color:#4ade80; font-weight:bold;">' + u.password + '</code></div>' +
+                row.innerHTML = '<div style="flex:1;"><div><b>' + u.username + '</b> (' + u.unit + ') — Пароль: <code style="color:#4ade80; font-weight:bold;">' + u.password + '</code></div>' + renderPermCheckboxes(u) + '</div>' +
                     '<button class="lb-btn" style="background:#ef4444; padding:5px 10px;" onclick="adminUserAction(\'' + u.key + '\', \'delete\')">🗑️ Удалить</button>';
                 aBox.appendChild(row);
             });
         });
+}
+
+function toggleUserPerm(userKey, permName, val) {
+    fetch('/api/admin/users/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: userKey, action: 'set_perm', permName: permName, permVal: val })
+    });
 }
 
 function adminUserAction(userKey, action) {
@@ -1008,6 +1115,7 @@ function adminUserAction(userKey, action) {
         body: JSON.stringify({ key: userKey, action: action })
     }).then(function() { fetchAdminUsersList(); });
 }
+
 function logoutUser() {
     localStorage.removeItem('journal_user');
     localStorage.removeItem('journal_callsign');
@@ -1029,15 +1137,15 @@ function loginAsViewer() {
 function sendAdminAlert() {
     if (!currentUser) return;
     const target = document.getElementById('admin-target').value;
+    if (!target) return alert("Сначала добавьте друга в Мессенджере!");
     const msg = document.getElementById('admin-msg').value.trim();
     if (!msg) return alert("Напишите текст!");
-    const now = new Date();
     const senderLabel = (currentCallsign && currentCallsign !== currentUser) ? (currentUser + ' (' + currentCallsign + ')') : currentUser;
     ws.send(JSON.stringify({
         type: 'admin_alert',
         sender: senderLabel,
         color: userColor,
-        time: now.toLocaleDateString() + ' ' + now.toLocaleTimeString().slice(0, 5),
+        time: getStaticDateTime(),
         target: target,
         text: msg
     }));
@@ -1047,16 +1155,16 @@ function sendAdminAlert() {
 function sendMiniNotification() {
     if (!currentUser) return alert("Войдите в систему, чтобы отправлять сообщения!");
     const target = document.getElementById('mini-notif-target').value;
+    if (!target) return alert("Сначала добавьте друга в Мессенджере!");
     const input = document.getElementById('mini-notif-input');
     const msg = input.value.trim();
     if (!msg) return;
-    const now = new Date();
     const senderLabel = (currentCallsign && currentCallsign !== currentUser) ? (currentUser + ' (' + currentCallsign + ')') : currentUser;
     ws.send(JSON.stringify({
         type: 'admin_alert',
         sender: senderLabel,
         color: userColor,
-        time: now.toLocaleDateString() + ' ' + now.toLocaleTimeString().slice(0, 5),
+        time: getStaticDateTime(),
         target: target,
         text: msg
     }));
@@ -1069,6 +1177,7 @@ function clearHistoryAdmin() {
         ws.send(JSON.stringify({ type: 'clear_history' }));
     }
 }
+
 function isUnreadForMe(a) {
     const me = currentCallsign || currentUser || 'Просмотр';
     if (currentUser && (a.sender === currentUser || a.sender === currentCallsign)) return false;

@@ -53,6 +53,7 @@ function openMessengerWindow(targetPartnerName) {
         return;
     }
     syncMessengerAuth();
+    if (typeof updateBroadcastTicker === 'function') updateBroadcastTicker();
     const modal = document.getElementById('messenger-modal');
     if (modal) modal.style.display = 'flex';
     fetchMessages();
@@ -63,6 +64,47 @@ function closeMessengerWindow() {
     const modal = document.getElementById('messenger-modal');
     if (modal) modal.style.display = 'none';
 }
+
+function renderAvatarElement(el, name, avatarDataUrl) {
+    if (!el) return;
+    if (avatarDataUrl) {
+        el.innerHTML = '<img src="' + avatarDataUrl + '" alt="av">';
+    } else {
+        el.innerHTML = '';
+        el.textContent = (name || '?').substring(0, 2).toUpperCase();
+    }
+}
+
+function uploadMyAvatar(inputEl) {
+    chatUser = getActiveChatIdentity();
+    if (!inputEl.files || inputEl.files.length === 0 || !chatUser) return;
+    const file = inputEl.files.item(0);
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const img = new Image();
+        img.onload = function() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 160; canvas.height = 160;
+            const ctx = canvas.getContext('2d');
+            const minSide = Math.min(img.width, img.height);
+            const sx = (img.width - minSide) / 2, sy = (img.height - minSide) / 2;
+            ctx.drawImage(img, sx, sy, minSide, minSide, 0, 0, 160, 160);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+            fetch('/api/user/avatar', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ user: chatUser, avatar: dataUrl })
+            }).then(function() {
+                allUsersAvatars[chatUser.toLowerCase()] = dataUrl;
+                renderAvatarElement(document.getElementById('my-avatar'), chatUser, dataUrl);
+                loadFriendsAndRequests();
+            });
+        };
+        img.src = e.target.result;
+    };
+    reader.readAsDataURL(file);
+}
+
 
 document.addEventListener('DOMContentLoaded', function() {
     const tInput = document.getElementById('text-input');
@@ -82,6 +124,8 @@ function loadFriendsAndRequests() {
         .then(function(data) {
             if (Array.isArray(data)) {
                 friendsList = data;
+                myMessengerFriends = data;
+                if (typeof populateTargetSelect === 'function') populateTargetSelect();
                 renderFriends();
                 updateTotalUnreadBadge();
             }
@@ -89,58 +133,15 @@ function loadFriendsAndRequests() {
     fetch('/api/friends/requests?user=' + encodeURIComponent(chatUser))
         .then(function(res) { return res.json(); })
         .then(function(data) {
-            if (Array.isArray(data)) {
-                friendRequests = data;
-                renderRequests();
-            }
+            if (Array.isArray(data)) { friendRequests = data; renderRequests(); }
+        }).catch(function() {});
+    fetch('/api/user/me?user=' + encodeURIComponent(chatUser))
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d && d.avatar) renderAvatarElement(document.getElementById('my-avatar'), chatUser, d.avatar);
         }).catch(function() {});
 }
-function updateTotalUnreadBadge() {
-    let total = 0;
-    friendsList.forEach(function(f) { total += (f.unread || 0); });
-    const badge = document.getElementById('msg-unread-total');
-    if (badge) {
-        badge.style.display = total > 0 ? 'inline-block' : 'none';
-        badge.innerText = total;
-    }
-}
 
-function sendFriendRequest() {
-    chatUser = getActiveChatIdentity();
-    const input = document.getElementById('new-friend-name');
-    const targetName = input.value.trim();
-    if (!targetName || !chatUser) return;
-    if (targetName.toLowerCase() === chatUser.toLowerCase()) {
-        alert("Нельзя отправить запрос самому себе!");
-        return;
-    }
-    const isAlreadyFriend = friendsList.some(function(f) { return !f.isGroup && f.name.toLowerCase() === targetName.toLowerCase(); });
-    if (isAlreadyFriend) {
-        alert("Этот пользователь уже в списке контактов!");
-        return;
-    }
-    fetch('/api/friends/request/send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ from: chatUser, to: targetName })
-    })
-    .then(function(res) { return res.json(); })
-    .then(function(data) {
-        if (data.success) { alert('Запрос отправлен: ' + targetName); input.value = ''; }
-        else { alert(data.message || "Ошибка отправки запроса"); }
-    })
-    .catch(function() { alert("Пользователь не найден"); });
-}
-
-function handleRequest(fromUser, action) {
-    chatUser = getActiveChatIdentity();
-    fetch('/api/friends/request/respond', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ user: chatUser, from: fromUser, action: action })
-    })
-    .then(function(res) { if (res.ok) loadFriendsAndRequests(); });
-}
 function renderRequests() {
     const box = document.getElementById('requests-box');
     if (!box) return;
@@ -150,7 +151,7 @@ function renderRequests() {
     friendRequests.forEach(function(req) {
         const item = document.createElement('div');
         item.className = 'request-item';
-        item.innerHTML = '<div class="request-info"><span class="request-name">' + req + '</span><span class="request-label">Запрос на связь</span></div>' +
+        item.innerHTML = '<div class="request-info"><span class="request-name">' + req + '</span><span class="request-label">Запрос в друзья</span></div>' +
             '<div class="request-actions"><button class="req-btn req-accept" onclick="handleRequest(\'' + req + '\', \'accept\')">Принять</button>' +
             '<button class="req-btn req-decline" onclick="handleRequest(\'' + req + '\', \'decline\')">Отклонить</button></div>';
         box.appendChild(item);
@@ -163,7 +164,7 @@ function renderFriends() {
     if (!box || !chatUser) return;
     box.innerHTML = '';
     if (friendsList.length === 0) {
-        box.innerHTML = '<div style="padding:20px; text-align:center; color:#64748b; font-size:13px;">Список контактов пуст</div>';
+        box.innerHTML = '<div style="padding:20px; text-align:center; color:#64748b; font-size:13px;">Список друзей пуст</div>';
         return;
     }
     friendsList.forEach(function(friend) {
@@ -175,15 +176,18 @@ function renderFriends() {
         item.onclick = function() { selectChat(friend); };
         const badgeHTML = (friend.unread > 0 && !isActive) ? ('<div class="unread-badge">' + friend.unread + '</div>') : '';
         const timeHTML = friend.time ? ('<div class="friend-time-label">' + friend.time + '</div>') : '';
-        const displayName = friend.isGroup ? ('👥 ' + friend.name) : friend.name;
-        const friendDataEscaped = JSON.stringify(friend).replace(/"/g, '&quot;');
+        const unitTag = (!friend.isGroup && friend.unit) ? (' <span style="color:#38bdf8;font-size:12px;">[' + friend.unit + ']</span>') : '';
+        const displayName = (friend.isGroup ? ('👥 ' + friend.name) : friend.name) + unitTag;
+        const avInner = friend.avatar ? ('<img src="' + friend.avatar + '" alt="av">') : friend.name.substring(0, 2).toUpperCase();
+        const friendDataEscaped = JSON.stringify({ id: friend.id, name: friend.name, isGroup: friend.isGroup }).replace(/"/g, '&quot;');
         const delBtnHTML = '<button class="delete-friend-btn" onclick="deleteFriend(' + friendDataEscaped + ', event)">&times;</button>';
-        item.innerHTML = '<div class="friend-info"><div class="avatar" style="width:36px; height:36px; font-size:13px;">' + friend.name.substring(0, 2) + '</div>' +
+        item.innerHTML = '<div class="friend-info"><div class="avatar" style="width:38px; height:38px; font-size:13px;">' + avInner + '</div>' +
             '<div class="friend-meta"><div class="friend-name">' + displayName + '</div><div class="friend-last-msg">' + friend.lastMessage + '</div></div>' +
             '<div class="friend-status-box">' + timeHTML + badgeHTML + '</div></div>' + delBtnHTML;
         box.appendChild(item);
     });
 }
+
 function openCreateGroupModal() { document.getElementById('group-modal').style.display = 'flex'; }
 function closeGroupModal() { document.getElementById('group-modal').style.display = 'none'; }
 
@@ -251,7 +255,7 @@ function selectChat(itemObj) {
         document.getElementById('chat-status').textContent = "в сети";
     }
     document.getElementById('partner-display-name').textContent = currentPartner;
-    document.getElementById('partner-avatar').textContent = currentPartner.substring(0, 2);
+    renderAvatarElement(document.getElementById('partner-avatar'), currentPartner, itemObj.avatar);
     document.getElementById('chat-status').style.display = "block";
     lastMessagesCount = 0; cancelReply();
     document.getElementById('text-input').removeAttribute('disabled');
