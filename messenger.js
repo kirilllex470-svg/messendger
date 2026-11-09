@@ -105,7 +105,6 @@ function uploadMyAvatar(inputEl) {
     reader.readAsDataURL(file);
 }
 
-
 document.addEventListener('DOMContentLoaded', function() {
     const tInput = document.getElementById('text-input');
     const fInput = document.getElementById('new-friend-name');
@@ -115,7 +114,6 @@ document.addEventListener('DOMContentLoaded', function() {
     if (miniInput) miniInput.addEventListener('keypress', function(e) { if (e.key === 'Enter') sendMiniNotification(); });
     syncMessengerAuth();
 });
-
 function loadFriendsAndRequests() {
     chatUser = getActiveChatIdentity();
     if (!chatUser) return;
@@ -133,7 +131,11 @@ function loadFriendsAndRequests() {
     fetch('/api/friends/requests?user=' + encodeURIComponent(chatUser))
         .then(function(res) { return res.json(); })
         .then(function(data) {
-            if (Array.isArray(data)) { friendRequests = data; renderRequests(); }
+            if (Array.isArray(data)) {
+                friendRequests = data;
+                renderRequests();
+                updateTotalUnreadBadge();
+            }
         }).catch(function() {});
     fetch('/api/user/me?user=' + encodeURIComponent(chatUser))
         .then(function(r) { return r.json(); })
@@ -187,7 +189,6 @@ function renderFriends() {
         box.appendChild(item);
     });
 }
-
 function openCreateGroupModal() { document.getElementById('group-modal').style.display = 'flex'; }
 function closeGroupModal() { document.getElementById('group-modal').style.display = 'none'; }
 
@@ -234,6 +235,7 @@ function deleteFriend(friendObj, event) {
         body: JSON.stringify({ user: chatUser, friends: cleanNames })
     }).then(function() { loadFriendsAndRequests(); });
 }
+
 function resetChatArea() {
     currentPartner = null; currentRoomId = null; isCurrentGroup = false; cancelReply();
     document.getElementById('partner-display-name').textContent = "Чат не выбран";
@@ -327,6 +329,7 @@ function toggleVideoRecord() {
         }).catch(function() { alert("Нет доступа к камере!"); });
     }
 }
+
 function uploadAnyFile(inputElement) {
     chatUser = getActiveChatIdentity();
     if (!inputElement.files || inputElement.files.length === 0 || !chatUser || !currentRoomId) return;
@@ -346,7 +349,6 @@ function uploadAnyFile(inputElement) {
         .then(function() { inputElement.value = ''; fetchMessages(); })
         .catch(function() { alert("Ошибка отправки файла!"); });
 }
-
 function sendMessage() {
     chatUser = getActiveChatIdentity();
     const textInput = document.getElementById('text-input');
@@ -368,6 +370,7 @@ function sendMessage() {
         fetchMessages();
     });
 }
+
 function setupSwipe(rowElement, msgId, rawText, msgType, sender) {
     const container = rowElement.querySelector('.swipe-container');
     const leftIndicator = rowElement.querySelector('.left-indicator');
@@ -409,6 +412,7 @@ function setupSwipe(rowElement, msgId, rawText, msgType, sender) {
         currentX = 0;
     });
 }
+
 function handleQuoteTrigger(id, text, sender) {
     quotedMessageId = id; quotedMessageText = text; quotedMessageSender = sender;
     const bar = document.getElementById('reply-bar');
@@ -442,10 +446,10 @@ function handleForwardTrigger(id, text, type, sender) {
     }
     modal.style.display = 'flex';
 }
-
 function closeForwardModal() {
     document.getElementById('forward-modal').style.display = 'none';
 }
+
 function executeForward(targetObj) {
     chatUser = getActiveChatIdentity();
     const sorted = [chatUser.toLowerCase(), targetObj.name.toLowerCase()].sort();
@@ -471,8 +475,12 @@ function inlineDeleteMessage(msgId) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ room: currentRoomId, messageId: msgId })
-    }).then(function() { fetchMessages(); });
+    }).then(function() {
+        lastMessagesCount = -1;
+        fetchMessages();
+    });
 }
+
 function fetchMessages() {
     chatUser = getActiveChatIdentity();
     if (!chatUser || !currentRoomId) return;
@@ -514,4 +522,68 @@ function fetchMessages() {
 function playVideoWithSound(v) {
     if (!v.muted) { v.muted = true; v.loop = true; v.play(); }
     else { v.muted = false; v.loop = false; v.currentTime = 0; v.play(); v.onended = function() { v.muted = true; v.loop = true; v.currentTime = 0; v.play(); }; }
+}
+
+function sendFriendRequest() {
+    chatUser = getActiveChatIdentity();
+    const input = document.getElementById('new-friend-name');
+    if (!input) return;
+    const targetName = input.value.trim();
+    if (!targetName) return alert('Введите позывной для добавления в друзья!');
+    if (!chatUser) return alert('Сначала войдите в систему!');
+    if (targetName.toLowerCase() === chatUser.toLowerCase()) {
+        return alert('Нельзя добавить самого себя!');
+    }
+    fetch('/api/friends/request/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: chatUser, to: targetName })
+    })
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+        if (data && data.success) {
+            input.value = '';
+            alert('✅ Заявка в друзья отправлена позывному: ' + targetName);
+            loadFriendsAndRequests();
+        } else {
+            alert('❌ ' + (data && data.message ? data.message : 'Ошибка отправки заявки'));
+        }
+    })
+    .catch(function() {
+        alert('❌ Ошибка связи с сервером');
+    });
+}
+
+function handleRequest(fromUser, action) {
+    chatUser = getActiveChatIdentity();
+    if (!chatUser || !fromUser) return;
+    fetch('/api/friends/request/respond', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user: chatUser, from: fromUser, action: action })
+    })
+    .then(function() {
+        loadFriendsAndRequests();
+    })
+    .catch(function() {});
+}
+
+function updateTotalUnreadBadge() {
+    const badge = document.getElementById('msg-unread-total');
+    if (!badge) return;
+    let total = 0;
+    if (Array.isArray(friendsList)) {
+        friendsList.forEach(function(f) {
+            if (f && f.unread > 0) total += f.unread;
+        });
+    }
+    if (Array.isArray(friendRequests)) {
+        total += friendRequests.length;
+    }
+    if (total > 0) {
+        badge.style.display = 'inline-block';
+        badge.innerText = total;
+    } else {
+        badge.style.display = 'none';
+    }
 }
