@@ -1,205 +1,841 @@
-:root { --bg: #0f172a; --panel: #1e293b; --accent: #3b82f6; --text: #f1f5f9; --border: #334155; --danger: #ef4444; }
-body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', monospace; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; box-sizing: border-box; }
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const zlib = require('zlib');
+const crypto = require('crypto');
+const WebSocket = require('ws');
+const webpush = require('web-push');
 
-#splash-screen { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0f172a; z-index: 200000; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box; transition: opacity 0.5s ease; }
-.splash-card { width: 100%; max-width: 440px; text-align: center; background: #1e293b; border: 2px solid #3b82f6; border-radius: 16px; padding: 25px 20px; box-shadow: 0 0 40px rgba(59, 130, 246, 0.3); box-sizing: border-box; }
-.splash-title { font-size: 30px; font-weight: 900; letter-spacing: 2px; color: #f8fafc; margin: 0 0 16px 0; text-shadow: 0 0 10px rgba(59, 130, 246, 0.8); }
-.progress-track { width: 100%; height: 16px; background: #090d16; border: 1px solid #3b82f6; border-radius: 999px; overflow: hidden; position: relative; }
-.progress-fill { width: 0%; height: 100%; background: #3b82f6; border-radius: 999px; transition: width 0.2s linear; }
-.splash-percent { margin-top: 10px; font-size: 15px; font-weight: bold; color: #38bdf8; font-family: monospace; }
-.splash-file-box { margin-top: 12px; background: #090d16; border: 1px solid #334155; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 12px; color: #94a3b8; display: flex; justify-content: space-between; align-items: center; box-sizing: border-box; }
-.splash-file-name { color: #e2e8f0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.splash-file-tag { color: #22c55e; font-weight: bold; flex-shrink: 0; }
+const storagePath = fs.existsSync('/data') ? '/data' : __dirname;
+const DB_FILE = path.join(storagePath, 'history.json');
+const ARCHIVE_FILE = path.join(storagePath, 'archive.json');
+const NOTIFS_FILE = path.join(storagePath, 'notifications.json');
+const MAPS_FILE = path.join(storagePath, 'maps.json');
+const SUBS_FILE = path.join(storagePath, 'subscriptions.json');
+const VAPID_FILE = path.join(storagePath, 'vapid.json');
 
-#login-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15, 23, 42, 0.98); z-index: 100; display: flex; flex-direction: column; justify-content: center; align-items: center; padding: 15px; box-sizing: border-box; overflow-y: auto; }
-.login-box { background: var(--panel); padding: 30px 25px; border-radius: 16px; border: 1px solid var(--border); width: 100%; max-width: 340px; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.7); box-sizing: border-box; }
-.login-box select, .login-box input { width: 100%; padding: 12px; margin-bottom: 14px; background: #0f172a; border: 1px solid var(--border); color: white; border-radius: 8px; font-size: 15px; outline: none; box-sizing: border-box; }
-.login-box button { width: 100%; padding: 13px; background: var(--accent); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-.login-box button:hover { background: #2563eb; }
-.reg-open-btn { background: #0284c7 !important; margin-top: 10px; }
-.viewer-btn { background: transparent !important; border: 1px solid #475569 !important; color: #94a3b8 !important; margin-top: 10px; }
-.install-btn { display: inline-block; width: 100%; background: #10b981 !important; color: white !important; border: none !important; margin-top: 10px; padding: 12px 15px; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 14px; box-sizing: border-box; }
+const USERS_FILE = path.join(storagePath, 'users.json');
+const CHAT_ROOMS_FILE = path.join(storagePath, 'chat_rooms.json');
+const FRIENDS_FILE = path.join(storagePath, 'friends.json');
+const GROUPS_FILE = path.join(storagePath, 'groups.json');
+const REQUESTS_FILE = path.join(storagePath, 'requests.json');
+const UPLOADS_DIR = path.join(storagePath, 'uploads');
 
-.custom-modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(9, 13, 22, 0.92); z-index: 160000; justify-content: center; align-items: center; padding: 15px; box-sizing: border-box; }
-.admin-users-card { background: #1e293b; border: 2px solid #38bdf8; border-radius: 14px; padding: 20px; width: 100%; max-width: 780px; max-height: 85vh; overflow-y: auto; box-sizing: border-box; }
-.admin-users-list { display: flex; flex-direction: column; gap: 8px; max-height: 260px; overflow-y: auto; background: #0f172a; padding: 10px; border-radius: 8px; border: 1px solid #334155; }
-.user-row-card { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; padding: 10px 12px; background: #1e293b; border: 1px solid #334155; border-radius: 8px; font-size: 14px; }
-
-.input-panel { background: var(--panel); padding: 25px; border-radius: 12px; border: 1px solid var(--border); width: 100%; max-width: 1200px; margin-bottom: 20px; display: none; box-sizing: border-box; }
-.inputs-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 15px; margin-bottom: 20px; }
-.field-group label { display: block; font-size: 13px; color: #94a3b8; margin-bottom: 5px; font-weight: bold; }
-.field-group select, .field-group input { width: 100%; padding: 12px; background: #0f172a; border: 1px solid var(--border); color: white; border-radius: 6px; font-size: 16px; outline: none; box-sizing: border-box; }
-.send-btn { width: 100%; padding: 15px; background: #22c55e; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-.stream-main-btn { width: 100%; margin-top: 12px; padding: 15px; background: #3b82f6; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-.stream-main-btn.live { background: #dc2626; animation: pulseLive 1.5s infinite; }
-.maps-main-btn { width: 100%; margin-top: 12px; padding: 15px; background: #8b5cf6; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-.archive-main-btn { width: 100%; margin-top: 12px; padding: 15px; background: #f59e0b; color: #090d16; border: none; border-radius: 8px; font-size: 16px; font-weight: 900; cursor: pointer; transition: 0.2s; }
-@keyframes pulseLive { 0%, 100% { opacity: 1; } 50% { opacity: 0.8; } }
-.stream-box { display: none; margin-top: 12px; padding: 15px; background: #0f172a; border: 1px solid var(--accent); border-radius: 8px; box-sizing: border-box; }
-.stream-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
-.stream-controls input, .stream-controls select { flex-grow: 1; padding: 12px; background: #1e293b; border: 1px solid var(--border); color: white; border-radius: 6px; font-size: 15px; outline: none; }
-.stream-start-btn { padding: 12px 18px; background: #22c55e; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
-.stream-stop-btn { padding: 12px 18px; background: var(--danger); color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
-.stream-link-btn { width: 100%; padding: 14px; background: #2563eb; color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer; }
-.maps-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 12px; }
-.map-tile { position: relative; height: 190px; border-radius: 14px; overflow: hidden; background: #090d16; border: 1px solid #334155; cursor: pointer; transition: transform 0.28s ease, box-shadow 0.28s ease, border-color 0.28s ease; box-shadow: 0 6px 18px rgba(0,0,0,0.45); }
-.map-tile:hover, .map-tile:active { transform: translateY(-5px) scale(1.02); border-color: #38bdf8; box-shadow: 0 14px 30px rgba(56, 189, 248, 0.35); }
-.map-tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.map-tile-overlay { position: absolute; bottom: 0; left: 0; right: 0; padding: 28px 12px 10px 12px; background: linear-gradient(to top, rgba(9, 13, 22, 0.96) 0%, rgba(9, 13, 22, 0.65) 60%, transparent 100%); display: flex; justify-content: space-between; align-items: flex-end; }
-.map-tile-time { color: #facc15; font-family: monospace; font-size: 12px; font-weight: bold; }
-.map-tile-target { background: rgba(59, 130, 246, 0.85); color: white; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: bold; }
-.map-tile-fresh { position: absolute; top: 10px; left: 10px; background: #22c55e; color: #052e16; font-size: 10px; font-weight: 900; padding: 3px 8px; border-radius: 999px; }
-
-#photo-lightbox { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(9, 13, 22, 0.98); z-index: 150000; flex-direction: column; box-sizing: border-box; user-select: none; }
-.lb-toolbar { width: 100%; padding: 10px 15px; background: #1e293b; border-bottom: 1px solid #334155; display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; box-sizing: border-box; z-index: 5; }
-.lb-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.lb-btn { padding: 8px 14px; background: #334155; color: white; border: 1px solid #475569; border-radius: 6px; font-weight: bold; font-size: 14px; cursor: pointer; }
-.lb-viewport { flex-grow: 1; width: 100%; overflow: hidden; position: relative; display: flex; justify-content: center; align-items: center; touch-action: none; cursor: grab; }
-#lightbox-img { max-width: 92%; max-height: 82vh; object-fit: contain; transform-origin: center center; transition: transform 0.08s ease-out; pointer-events: none; border: 1px solid #334155; border-radius: 6px; }
-
-#stream-page, #archive-page, #messenger-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #0f172a; z-index: 140000; flex-direction: column; box-sizing: border-box; }
-.stream-page-header { width: 100%; padding: 12px 16px; background: #1e293b; border-bottom: 2px solid #3b82f6; display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; box-sizing: border-box; }
-#stream-iframe { flex-grow: 1; width: 100%; border: none; background: #090d16; }
-
-.archive-body { flex-grow: 1; width: 100%; max-width: 1400px; margin: 0 auto; padding: 16px; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; gap: 18px; }
-.calendar-card { background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 16px; width: 100%; max-width: 520px; margin: 0 auto; box-sizing: border-box; }
-.cal-nav { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-.cal-month-title { font-size: 17px; font-weight: 900; color: #f8fafc; letter-spacing: 1px; }
-.cal-weekdays { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; text-align: center; font-size: 12px; color: #94a3b8; font-weight: bold; margin-bottom: 6px; }
-.cal-days { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
-.cal-day { height: 46px; border-radius: 8px; background: #0f172a; border: 1px solid #334155; color: #cbd5e1; display: flex; flex-direction: column; justify-content: center; align-items: center; cursor: pointer; font-size: 14px; font-weight: bold; position: relative; }
-.cal-day.empty { background: transparent; border-color: transparent; pointer-events: none; }
-.cal-day.has-data { border-color: #22c55e; background: rgba(34, 197, 94, 0.12); color: #fff; }
-.cal-day.selected { background: #f59e0b !important; color: #090d16 !important; border-color: #fbbf24 !important; font-weight: 900; }
-.cal-dot { font-size: 10px; color: #4ade80; font-family: monospace; line-height: 1; margin-top: 2px; }
-.cal-day.selected .cal-dot { color: #090d16; font-weight: 900; }
-
-#admin-zone { display: none; margin-top: 30px; padding: 20px; border: 2px solid var(--danger); border-radius: 10px; background: rgba(239, 68, 68, 0.1); }
-.admin-controls { display: flex; gap: 10px; }
-.admin-controls select { width: 200px; padding: 12px; border-radius: 6px; border: none; font-size: 16px; }
-.admin-controls input { flex-grow: 1; padding: 12px; border-radius: 6px; border: none; font-size: 16px; }
-.admin-controls button { padding: 12px 20px; background: var(--danger); color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; }
-
-#alert-modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(185, 28, 28, 0.98); z-index: 210000; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 15px; box-sizing: border-box; }
-.alert-content { background: white; color: #b91c1c; padding: 30px; border-radius: 20px; width: 100%; max-width: 600px; box-shadow: 0 0 50px rgba(0,0,0,0.5); animation: shake 0.5s infinite; box-sizing: border-box; }
-@keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
-.alert-btn { margin-top: 20px; width: 100%; padding: 18px; font-size: 20px; background: #b91c1c; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; }
-
-.notifications-window { width: 100%; max-width: 1400px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 15px; margin-bottom: 20px; box-sizing: border-box; }
-.notifications-list { display: flex; flex-direction: column; gap: 8px; max-height: 280px; overflow-y: auto; }
-.notif-item { background: rgba(239, 68, 68, 0.15); border: 1px solid rgba(239, 68, 68, 0.35); border-left: 5px solid var(--danger); padding: 10px 12px; border-radius: 6px; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; font-size: 14px; cursor: pointer; }
-.notif-item.read { background: rgba(34, 197, 94, 0.15); border: 1px solid rgba(34, 197, 94, 0.35); border-left: 5px solid #22c55e; }
-.notif-time { color: #facc15; font-family: monospace; }
-.notif-sender { font-weight: bold; }
-.notif-target { background: #334155; color: #f8fafc; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
-.notif-text { color: #f1f5f9; flex-grow: 1; word-break: break-word; font-weight: bold; }
-.notif-status { font-size: 12px; font-weight: bold; padding: 3px 8px; border-radius: 4px; background: rgba(239, 68, 68, 0.25); color: #fca5a5; }
-.notif-item.read .notif-status { background: rgba(34, 197, 94, 0.25); color: #86efac; }
-
-.history-container { width: 100%; max-width: 1400px; overflow-x: auto; border-radius: 8px; }
-table { width: 100%; border-collapse: collapse; min-width: 850px; }
-th, td { border: 1px solid var(--border); padding: 10px; text-align: center; font-size: 14px; }
-th { background: #1e293b; color: #94a3b8; }
-.time-cell { color: #facc15; font-family: monospace; }
-.user-cell { font-weight: bold; }
-/* СТИЛИ ВСТРОЕННОГО МЕССЕНДЖЕРА (ЧАСТЬ 1) */
-.auth-input { width: 100%; padding: 14px 16px; margin-bottom: 16px; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; outline: none; background: rgba(15, 23, 42, 0.8); color: #f8fafc; font-size: 16px; box-sizing: border-box; }
-.auth-btn { width: 100%; padding: 14px; background: #00a884; color: white; border: none; border-radius: 12px; font-size: 16px; font-weight: 600; cursor: pointer; }
-#app-screen { display: flex; flex: 1; width: 100%; height: calc(100% - 60px); background: rgba(15, 23, 42, 0.95); position: relative; flex-direction: row; overflow: hidden; }
-.sidebar { width: 32%; min-width: 300px; height: 100%; background: #0f172a; border-right: 1px solid rgba(255, 255, 255, 0.08); display: flex; flex-direction: column; z-index: 5; transition: transform 0.25s ease-in-out; }
-.sidebar-header { background: rgba(30, 41, 59, 0.5); min-height: 56px; padding: 10px 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
-.sidebar-user { display: flex; align-items: center; gap: 12px; font-weight: 600; font-size: 15px; color: #f8fafc; min-width: 0; flex: 1; }
-.search-container { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; background: rgba(15, 23, 42, 0.4); border-bottom: 1px solid rgba(255,255,255,0.05); }
-.search-row { display: flex; gap: 8px; width: 100%; }
-.search-input { flex: 1; padding: 10px 14px; border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; background: rgba(15, 23, 42, 0.8); color: #f8fafc; font-size: 15px; outline: none; min-width: 0; }
-.add-friend-btn { background: rgba(0, 168, 132, 0.2); color: #00ca9e; border: 1px solid rgba(0, 168, 132, 0.3); padding: 0 14px; border-radius: 12px; font-weight: 600; cursor: pointer; font-size: 18px; }
-.create-group-btn { width: 100%; padding: 8px; background: rgba(2, 132, 199, 0.2); color: #38bdf8; border: 1px solid rgba(2, 132, 199, 0.3); border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; }
-.requests-section { border-bottom: 1px solid rgba(255,255,255,0.05); background: rgba(244, 180, 26, 0.05); max-height: 150px; overflow-y: auto; }
-.request-item { display: flex; align-items: center; justify-content: space-between; padding: 10px 16px; border-bottom: 1px solid rgba(255,255,255,0.04); }
-.request-info { display: flex; flex-direction: column; min-width: 0; flex: 1; }
-.request-name { font-size: 14px; color: #f8fafc; font-weight: 600; }
-.request-label { font-size: 11px; color: #fbbf24; }
-.request-actions { display: flex; gap: 6px; }
-.req-btn { border: none; padding: 5px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; }
-.req-accept { background: #00a884; color: white; }
-.req-decline { background: rgba(244, 63, 94, 0.2); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); }
-.friends-list { flex: 1; overflow-y: auto; padding: 8px; }
-.friend-item { display: flex; align-items: center; justify-content: space-between; padding: 12px 14px; border-radius: 16px; margin-bottom: 4px; cursor: pointer; border: 1px solid transparent; }
-.friend-item.active { background: rgba(0, 168, 132, 0.15); border: 1px solid rgba(0, 168, 132, 0.2); }
-.friend-info { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
-.friend-meta { display: flex; flex-direction: column; min-width: 0; flex: 1; margin-right: 8px; }
-.friend-name { font-size: 15px; color: #e2e8f0; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.friend-last-msg { font-size: 13px; color: #94a3b8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
-.friend-status-box { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
-.friend-time-label { font-size: 11px; color: #64748b; }
-.unread-badge { background: #00a884; color: white; font-size: 11px; font-weight: bold; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: flex; justify-content: center; align-items: center; }
-.delete-friend-btn { background: transparent; border: none; color: #64748b; font-size: 20px; cursor: pointer; padding: 0 4px; }
-.chat-area { flex: 1; display: flex; flex-direction: column; background: rgba(15, 23, 42, 0.4); height: 100%; overflow: hidden; position: relative; }
-.chat-header { background: rgba(30, 41, 59, 0.6); min-height: 56px; display: flex; align-items: center; padding: 8px 16px; border-bottom: 1px solid rgba(255, 255, 255, 0.05); }
-.back-btn { display: none; color: #00a884; background: transparent; border: none; font-size: 26px; margin-right: 12px; cursor: pointer; padding: 4px 8px; }
-.avatar { width: 38px; height: 38px; background: linear-gradient(135deg, #00a884, #0284c7); border-radius: 12px; display: flex; justify-content: center; align-items: center; color: white; font-weight: 600; text-transform: uppercase; flex-shrink: 0; font-size: 14px; }
-/* СТИЛИ ВСТРОЕННОГО МЕССЕНДЖЕРА (ЧАСТЬ 2) */
-.user-info { min-width: 0; margin-left: 12px; }
-.partner-title { color: #f8fafc; font-size: 15px; font-weight: 600; margin: 0; }
-.partner-status { color: #00ca9e; font-size: 12px; margin: 0; }
-#messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 12px; background: rgba(10, 15, 30, 0.5); position: relative; }
-.chat-placeholder { margin: auto; background: rgba(30, 41, 59, 0.8); padding: 16px 24px; border-radius: 16px; color: #94a3b8; font-size: 14px; text-align: center; }
-.message-row { display: flex; width: 100%; position: relative; align-items: center; }
-.message-row.my-msg { justify-content: flex-end; }
-.message-row.other-msg { justify-content: flex-start; }
-.swipe-container { display: flex; align-items: center; max-width: 75%; position: relative; transition: transform 0.2s ease-out; user-select: none; }
-.swipe-indicator { position: absolute; top: 50%; transform: translateY(-50%); font-size: 18px; opacity: 0; pointer-events: none; color: #00ca9e; }
-.swipe-indicator.left-indicator { left: -35px; }
-.swipe-indicator.right-indicator { right: -35px; }
-.bubble { padding: 10px 36px 10px 14px; border-radius: 16px; font-size: 15px; color: #f1f5f9; position: relative; word-break: break-word; min-width: 60px; }
-.my-msg .bubble { background: linear-gradient(135deg, #008f72 0%, #00a884 100%); border-bottom-right-radius: 4px; }
-.other-msg .bubble { background: #1e293b; border-bottom-left-radius: 4px; border: 1px solid rgba(255,255,255,0.05); }
-.msg-del-inline-btn { position: absolute; right: 8px; top: 8px; background: transparent; border: none; color: rgba(255,255,255,0.4); font-size: 14px; cursor: pointer; }
-.msg-quote-block { background: rgba(0, 0, 0, 0.25); border-left: 3px solid #00ca9e; padding: 6px 10px; border-radius: 4px; margin-bottom: 6px; font-size: 13px; color: #cbd5e1; }
-.msg-quote-author { font-weight: bold; color: #38bdf8; margin-bottom: 2px; font-size: 12px; }
-.msg-forwarded-label { font-size: 11px; font-style: italic; color: rgba(255, 255, 255, 0.6); padding-bottom: 3px; }
-.msg-author { font-size: 12px; font-weight: 600; color: #38bdf8; padding-bottom: 3px; }
-.video-round { width: 260px; height: 260px; border-radius: 50%; object-fit: cover; border: 4px solid #00a884; background: black; display: block; cursor: pointer; }
-.audio-player { height: 40px; max-width: 220px; display: block; margin-top: 2px; }
-.chat-image { max-width: 260px; max-height: 260px; border-radius: 12px; display: block; margin-top: 4px; cursor: pointer; }
-.chat-file-card { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,0.25); padding: 10px 12px; border-radius: 12px; margin-top: 4px; text-decoration: none; color: #f1f5f9; }
-.chat-file-name { font-size: 14px; font-weight: 500; color: #00ca9e; }
-.chat-file-action { font-size: 11px; color: #94a3b8; }
-.msg-text { color: #f8fafc !important; font-size: 15px; line-height: 1.4; display: block; }
-.msg-time { font-size: 11px; color: rgba(255, 255, 255, 0.5); text-align: right; margin-top: 4px; }
-.input-container { background: #111827; display: flex; flex-direction: column; padding: 12px 15px; gap: 10px; border-top: 1px solid rgba(255, 255, 255, 0.08); }
-.reply-preview-bar { display: none; background: rgba(30, 41, 59, 0.8); padding: 8px 12px; border-left: 4px solid #00ca9e; border-radius: 6px; align-items: center; justify-content: space-between; font-size: 13px; color: #e2e8f0; }
-.reply-preview-close { background: transparent; border: none; color: #94a3b8; font-size: 18px; cursor: pointer; }
-.tools-row { display: flex; align-items: center; gap: 12px; }
-.input-row { display: flex; align-items: center; gap: 10px; }
-#text-input { flex: 1; height: 46px; background: rgba(15, 23, 42, 0.8); border: 1px solid rgba(255,255,255,0.1); border-radius: 14px; padding: 0 16px; color: #f8fafc; outline: none; font-size: 16px; }
-#send-btn { background: #00a884; border: none; color: white; height: 46px; padding: 0 16px; border-radius: 12px; font-weight: 600; cursor: pointer; }
-.media-btn { background: #1f2937; border: 1px solid rgba(255,255,255,0.08); color: #00ca9e; width: 42px; height: 42px; border-radius: 12px; display: flex; justify-content: center; align-items: center; cursor: pointer; font-size: 18px; }
-.media-btn.recording { background: #f43f5e; color: white; animation: pulseLive 1s infinite; }
-.modal-overlay { position: fixed; top:0; left:0; width:100%; height:100%; background: rgba(0,0,0,0.7); display: none; justify-content: center; align-items: center; z-index: 190000; }
-.modal-box { background: #1e293b; border: 1px solid rgba(255,255,255,0.1); width: 90%; max-width: 400px; border-radius: 20px; padding: 20px; display: flex; flex-direction: column; max-height: 75vh; box-sizing: border-box; }
-.modal-box h3 { color: #f8fafc; margin: 0 0 14px 0; font-size: 18px; display: flex; justify-content: space-between; align-items: center; }
-.modal-close { background: transparent; border: none; color: #94a3b8; font-size: 24px; cursor: pointer; }
-.modal-list { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
-.modal-item { display: flex; align-items: center; justify-content: space-between; padding: 12px; background: rgba(15,23,42,0.6); border-radius: 12px; cursor: pointer; color: #e2e8f0; }
-@media (max-width: 768px) {
-    body { padding: 10px; }
-    .inputs-grid, .maps-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
-    .admin-controls, .stream-controls { flex-direction: column; }
-    .admin-controls select, .admin-controls input, .admin-controls button, .stream-controls input, .stream-controls select, .stream-controls button { width: 100%; box-sizing: border-box; }
-    .sidebar { width: 100%; min-width: 100%; position: absolute; left: 0; top: 0; height: 100%; z-index: 10; }
-    .sidebar.hidden { transform: translateX(-100%); }
-    .chat-area { width: 100%; min-width: 100%; position: absolute; left: 0; top: 0; z-index: 4; }
-    .back-btn { display: block; }
+if (!fs.existsSync(UPLOADS_DIR)) {
+    try { fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (e) {}
 }
-@media (max-width: 480px) { .inputs-grid, .maps-grid { grid-template-columns: 1fr; } }
-/* БЕГУЩАЯ СТРОКА, АВАТАРКИ И ПЕРЕКЛЮЧАТЕЛИ ПРАВ КНОПОК */
-.msg-ticker-wrap { width: 100%; overflow: hidden; background: #090d16; border: 1px solid #1e293b; border-left: 4px solid #ef4444; border-radius: 6px; padding: 5px 0; white-space: nowrap; box-sizing: border-box; }
-.msg-ticker-move { display: inline-block; padding-left: 100%; color: #facc15; font-family: monospace; font-size: 13px; font-weight: bold; animation: tickerScroll 24s linear infinite; }
-.msg-ticker-wrap:hover .msg-ticker-move { animation-play-state: paused; }
-@keyframes tickerScroll { 0% { transform: translateX(0); } 100% { transform: translateX(-100%); } }
-.avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; display: block; }
-.friends-nice-select { padding: 10px 12px; background: #0f172a; color: #38bdf8; border: 1px solid #00a884; border-radius: 8px; font-weight: bold; font-size: 14px; outline: none; }
-.perm-grid { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
-.perm-chip { display: inline-flex; align-items: center; gap: 4px; background: #0f172a; border: 1px solid #334155; padding: 4px 8px; border-radius: 6px; font-size: 12px; color: #cbd5e1; cursor: pointer; user-select: none; }
-.perm-chip input { margin: 0; cursor: pointer; }
+
+function readJSON(filePath, defaultVal) {
+    try {
+        if (fs.existsSync(filePath)) {
+            const raw = fs.readFileSync(filePath, 'utf-8');
+            return raw.trim() ? JSON.parse(raw) : defaultVal;
+        }
+    } catch (e) {}
+    return defaultVal;
+}
+
+function writeJSON(filePath, data) {
+    try { fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8'); } catch (e) {}
+}
+let vapidKeys = fs.existsSync(VAPID_FILE) ? readJSON(VAPID_FILE, null) : null;
+if (!vapidKeys || !vapidKeys.publicKey) {
+    vapidKeys = webpush.generateVAPIDKeys();
+    writeJSON(VAPID_FILE, vapidKeys);
+}
+webpush.setVapidDetails('mailto:admin@msb55115.local', vapidKeys.publicKey, vapidKeys.privateKey);
+
+let pushSubscriptions = readJSON(SUBS_FILE, new Array());
+if (!Array.isArray(pushSubscriptions)) pushSubscriptions = new Array();
+
+let usersDB = readJSON(USERS_FILE, {});
+usersDB['муравей'] = {
+    username: 'муравей',
+    password: '551150000',
+    unit: 'АДМИН',
+    approved: true,
+    avatar: (usersDB['муравей'] && usersDB['муравей'].avatar) ? usersDB['муравей'].avatar : '',
+    permissions: { row: true, stream: true, maps: true, archive: true }
+};
+writeJSON(USERS_FILE, usersDB);
+
+let roomsDB = readJSON(CHAT_ROOMS_FILE, {});
+let friendsDB = readJSON(FRIENDS_FILE, {});
+let groupsDB = readJSON(GROUPS_FILE, {});
+let requestsDB = readJSON(REQUESTS_FILE, {});
+const db = { lastRead: {} };
+
+let tableHistory = readJSON(DB_FILE, new Array());
+if (!Array.isArray(tableHistory)) tableHistory = new Array();
+let archiveHistory = readJSON(ARCHIVE_FILE, {});
+let notificationsHistory = readJSON(NOTIFS_FILE, new Array());
+let mapsHistory = readJSON(MAPS_FILE, new Array());
+let activeAlerts = {};
+let streamState = { active: false, url: '' };
+
+function getServerDateTime() {
+    const d = new Date(Date.now() + 3 * 3600 * 1000);
+    return String(d.getUTCDate()).padStart(2, '0') + '.' + String(d.getUTCMonth() + 1).padStart(2, '0') + '.' + d.getUTCFullYear() + ' ' + String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
+}
+function makeTacticalIcon(size) {
+    const crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+        let c = n;
+        for (let k = 0; k < 8; k++) c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+        crcTable.fill(c, n, n + 1);
+    }
+    function crc32(buf) {
+        let c = -1;
+        for (let i = 0; i < buf.length; i++) {
+            const b = buf.readUInt8(i);
+            const idx = (c ^ b) & 0xff;
+            const t = crcTable.subarray(idx, idx + 1).reduce(function(a, v) { return v; }, 0);
+            c = (c >>> 8) ^ t;
+        }
+        return (c ^ -1) >>> 0;
+    }
+    function chunk(type, data) {
+        const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+        const t = Buffer.from(type, 'ascii');
+        const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat(Array.of(t, data))), 0);
+        return Buffer.concat(Array.of(len, t, data, crc));
+    }
+    const ihdr = Buffer.alloc(13, 0);
+    ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+    ihdr.writeUInt8(8, 8); ihdr.writeUInt8(2, 9);
+    const rowLen = 1 + size * 3;
+    const raw = Buffer.alloc(size * rowLen, 0);
+    const half = size / 2;
+    for (let y = 0; y < size; y++) {
+        const rowOff = y * rowLen;
+        raw.writeUInt8(0, rowOff);
+        for (let x = 0; x < size; x++) {
+            const p = rowOff + 1 + x * 3;
+            const dx = x - half, dy = y - half, r = Math.sqrt(dx * dx + dy * dy);
+            let red = 15, green = 23, blue = 42;
+            if (r <= half * 0.88) {
+                if (r >= half * 0.82) { red = 56; green = 189; blue = 248; }
+                else {
+                    red = 30; green = 41; blue = 59;
+                    const c1 = Math.abs(dy - (-half * 0.32 + Math.abs(dx) * 0.75));
+                    const c2 = Math.abs(dy - (-half * 0.05 + Math.abs(dx) * 0.75));
+                    const c3 = Math.abs(dy - (half * 0.22 + Math.abs(dx) * 0.75));
+                    if ((c1 <= size * 0.045 && Math.abs(dx) <= half * 0.52) ||
+                        (c2 <= size * 0.045 && Math.abs(dx) <= half * 0.46) ||
+                        (c3 <= size * 0.045 && Math.abs(dx) <= half * 0.38)) {
+                        red = 250; green = 204; blue = 21;
+                    }
+                }
+            }
+            raw.writeUInt8(red, p); raw.writeUInt8(green, p + 1); raw.writeUInt8(blue, p + 2);
+        }
+    }
+    const idat = zlib.deflateSync(raw);
+    const sig = Buffer.from('89504e470d0a1a0a', 'hex');
+    return Buffer.concat(Array.of(sig, chunk('IHDR', ihdr), chunk('IDAT', idat), chunk('IEND', Buffer.alloc(0))));
+}
+const TACTICAL_ICON_192 = makeTacticalIcon(192);
+const TACTICAL_ICON_512 = makeTacticalIcon(512);
+const MANIFEST_JSON = JSON.stringify({
+    name: "МСБ-55115",
+    short_name: "МСБ55115",
+    start_url: "/",
+    display: "standalone",
+    background_color: "#0f172a",
+    theme_color: "#0f172a",
+    icons: Array.of(
+        { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+        { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" }
+    )
+});
+
+const SW_CODE = [
+    "self.addEventListener('install', function(e) { self.skipWaiting(); });",
+    "self.addEventListener('activate', function(e) { e.waitUntil(clients.claim()); });",
+    "self.addEventListener('push', function(event) {",
+    "    var data = { title: '🛑 СООБЩЕНИЕ В МСБ-55115!', body: 'Срочно откройте приложение!' };",
+    "    if (event.data) { try { data = event.data.json(); } catch (e) {} }",
+    "    event.waitUntil(self.registration.showNotification(data.title, {",
+    "        body: data.body,",
+    "        vibrate: Array.of(800, 200, 800, 200, 800, 200, 1000),",
+    "        silent: false,",
+    "        requireInteraction: true,",
+    "        renotify: true,",
+    "        tag: 'admin-alert-' + Date.now()",
+    "    }));",
+    "});",
+    "self.addEventListener('notificationclick', function(event) {",
+    "    event.notification.close();",
+    "    event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clientList) {",
+    "        for (var i = 0; i < clientList.length; i++) {",
+    "            var cl = clientList.at(i);",
+    "            if (cl && 'focus' in cl) return cl.focus();",
+    "        }",
+    "        if (clients.openWindow) return clients.openWindow('/');",
+    "    }));",
+    "});"
+].join('\n');
+function readBodyJSON(req, cb) {
+    let body = '';
+    req.on('data', function(chunk) { body += chunk.toString(); });
+    req.on('end', function() {
+        try { cb(null, JSON.parse(body)); } catch (e) { cb(e, null); }
+    });
+}
+
+const server = http.createServer(function(req, res) {
+    const urlPath = (req.url || '/').split('?').at(0);
+
+    if (urlPath === '/sw.js') {
+        res.writeHead(200, { 'Content-Type': 'application/javascript; charset=utf-8', 'Service-Worker-Allowed': '/', 'Cache-Control': 'no-cache' });
+        return res.end(SW_CODE);
+    }
+    if (urlPath === '/manifest.json') {
+        res.writeHead(200, { 'Content-Type': 'application/manifest+json; charset=utf-8' });
+        return res.end(MANIFEST_JSON);
+    }
+    if (urlPath === '/icon-192.png' || urlPath === '/favicon.ico') {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        return res.end(TACTICAL_ICON_192);
+    }
+    if (urlPath === '/icon-512.png') {
+        res.writeHead(200, { 'Content-Type': 'image/png' });
+        return res.end(TACTICAL_ICON_512);
+    }
+    if (urlPath === '/style.css' || urlPath === '/journal.js' || urlPath === '/messenger.js') {
+        const cType = urlPath.endsWith('.css') ? 'text/css; charset=utf-8' : 'application/javascript; charset=utf-8';
+        fs.readFile(path.join(__dirname, urlPath.slice(1)), function(err, data) {
+            if (err) { res.writeHead(404); return res.end('Not Found'); }
+            res.writeHead(200, { 'Content-Type': cType, 'Cache-Control': 'no-cache' });
+            res.end(data);
+        });
+        return;
+    }
+    if (req.method === 'POST' && urlPath === '/api/auth/register') {
+        return readBodyJSON(req, function(err, data) {
+            if (err || !data || !data.username || !data.password || !data.unit) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: 'Заполните все поля' }));
+            }
+            const key = data.username.trim().toLowerCase();
+            if (usersDB[key]) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: 'Этот позывной уже занят!' }));
+            }
+            usersDB[key] = {
+                username: data.username.trim(),
+                password: data.password.trim(),
+                unit: data.unit,
+                approved: false,
+                avatar: '',
+                permissions: { row: false, stream: false, maps: false, archive: false }
+            };
+            writeJSON(USERS_FILE, usersDB);
+            broadcastWS({ type: 'users_updated' });
+            broadcastAlert(data.unit, '#38bdf8', getServerDateTime(), 'АДМИН', '📝 НОВАЯ ЗАЯВКА НА РЕГИСТРАЦИЮ: Позывной [' + data.username.trim() + '] (' + data.unit + '). Откройте "Пользователи и заявки"!');
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        });
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/auth/login') {
+        return readBodyJSON(req, function(err, data) {
+            if (err || !data || !data.username || !data.password) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: 'Пустые поля' }));
+            }
+            const u = usersDB[data.username.trim().toLowerCase()];
+            if (!u) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: 'Позывной не найден. Нажмите "Регистрация"!' }));
+            }
+            if (u.password !== data.password.trim()) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: 'Неверный пароль!' }));
+            }
+            if (u.approved === false) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: '⏳ Заявка еще не одобрена АДМИНОМ!' }));
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                success: true,
+                username: u.username,
+                unit: u.unit,
+                permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
+            }));
+        });
+    }
+    if (req.method === 'GET' && urlPath === '/api/user/me') {
+        const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+        const user = (myUrl.searchParams.get('user') || '').toLowerCase();
+        const u = usersDB[user] || {};
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+        return res.end(JSON.stringify({
+            avatar: u.avatar || '',
+            unit: u.unit || '',
+            permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
+        }));
+    }
+
+     if (urlPath === '/api/user/me' && req.method === 'GET') {
+        const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+        const user = (myUrl.searchParams.get('user') || '').toLowerCase();
+        const u = usersDB[user] || {};
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+        return res.end(JSON.stringify({
+            avatar: u.avatar || '',
+            unit: u.unit || '',
+            permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
+        }));
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/user/avatar') {
+        return readBodyJSON(req, function(err, data) {
+            if (!err && data && data.user && data.avatar) {
+                const k = data.user.trim().toLowerCase();
+                if (!usersDB[k]) usersDB[k] = { username: data.user.trim(), password: '', unit: '', approved: true };
+                usersDB[k].avatar = data.avatar;
+                writeJSON(USERS_FILE, usersDB);
+                broadcastWS({ type: 'users_updated' });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+        });
+    }
+
+    if (req.method === 'GET' && urlPath === '/api/admin/users') {
+        const pending = new Array(), approved = new Array();
+        Object.keys(usersDB).forEach(function(k) {
+            const u = usersDB[k];
+            const item = { key: k, username: u.username, password: u.password, unit: u.unit || '—', permissions: u.permissions || { row: false, stream: false, maps: false, archive: false } };
+            if (u.approved === false) pending.push(item);
+            else approved.push(item);
+        });
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+        return res.end(JSON.stringify({ pending: pending, approved: approved }));
+    }
+
+    if (req.method === 'POST' && urlPath === '/api/admin/users/action') {
+        return readBodyJSON(req, function(err, data) {
+            if (!err && data && data.key && usersDB[data.key]) {
+                if (data.action === 'approve') usersDB[data.key].approved = true;
+                else if (data.action === 'delete') delete usersDB[data.key];
+                else if (data.action === 'set_perm' && data.permName) {
+                    if (!usersDB[data.key].permissions) usersDB[data.key].permissions = { row: false, stream: false, maps: false, archive: false };
+                    usersDB[data.key].permissions[data.permName] = Boolean(data.permVal);
+                }
+                writeJSON(USERS_FILE, usersDB);
+                broadcastWS({ type: 'users_updated' });
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true }));
+        });
+    }
+
+    if (req.method === 'GET' && urlPath === '/maps-list') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(JSON.stringify(mapsHistory));
+    }
+
+    if (req.method === 'GET' && urlPath === '/archive-data') {
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        return res.end(JSON.stringify(archiveHistory));
+    }
+
+    if (req.method === 'POST' && urlPath === '/upload-map') {
+        const chunks = new Array();
+        req.on('data', function(chunk) { chunks.push(chunk); });
+        req.on('end', function() {
+            try {
+                const msg = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+                if (msg && msg.image) {
+                    saveAndBroadcastMap(msg);
+                    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+                    res.end(JSON.stringify({ ok: true, maps: mapsHistory }));
+                } else { res.writeHead(400); res.end(JSON.stringify({ ok: false })); }
+            } catch (e) { res.writeHead(500); res.end(JSON.stringify({ ok: false })); }
+        });
+        return;
+    }
+
+     if (urlPath === '/api/friends/get' && req.method === 'GET') {
+        const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+        const user = myUrl.searchParams.get('user');
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+        if (!user) return res.end(JSON.stringify([]));
+        const myLowerName = user.toLowerCase();
+        const myFriends = friendsDB[myLowerName] || [];
+        const myReads = db.lastRead[myLowerName] || {};
+        const listData = myFriends.map(function(friendName) {
+            const sortedRoom = [myLowerName, friendName.toLowerCase()].sort();
+            const roomId = sortedRoom + '_' + sortedRoom;
+            return buildChatPreviewItem(friendName, roomId, myLowerName, myReads[roomId] || 0, false);
+        });
+        Object.keys(groupsDB).forEach(function(groupId) {
+            const group = groupsDB[groupId];
+            if (group.members.some(function(m) { return m.toLowerCase() === myLowerName; })) {
+                listData.push(buildChatPreviewItem(group.name, groupId, myLowerName, myReads[groupId] || 0, true));
+            }
+        });
+        return res.end(JSON.stringify(listData));
+    }
+
+    if (urlPath === '/api/friends/request/send' && req.method === 'POST') {
+        return readBodyJSON(req, function(err, data) {
+            if (err || !data || !data.from || !data.to) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: 'Неполные данные' }));
+            }
+            const targetKey = data.to.trim().toLowerCase();
+            const stdUnits = ['шр', 'рота-1', 'рота-2', 'рота-3', 'админ'];
+            
+            // Проверяем наличие позывного в зарегистрированных или штатных подразделениях
+            if (!usersDB[targetKey] && !stdUnits.includes(targetKey)) {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                return res.end(JSON.stringify({ success: false, message: 'Позывной или Подразделение не найдены в системе!' }));
+            }
+            if (!requestsDB[targetKey]) requestsDB[targetKey] = [];
+            if (!requestsDB[targetKey].includes(data.from)) {
+                requestsDB[targetKey].push(data.from);
+                writeJSON(REQUESTS_FILE, requestsDB);
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true }));
+        });
+    }
+
+    if (urlPath === '/api/friends/requests' && req.method === 'GET') {
+        const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+        const user = myUrl.searchParams.get('user');
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify(user ? (requestsDB[user.toLowerCase()] || []) : []));
+    }
+
+    if (urlPath === '/api/friends/request/respond' && req.method === 'POST') {
+        return readBodyJSON(req, function(err, data) {
+            if (err || !data || !data.user || !data.from || !data.action) { res.writeHead(400); return res.end('Bad'); }
+            const myL = data.user.toLowerCase(), fromL = data.from.toLowerCase();
+            if (requestsDB[myL]) {
+                requestsDB[myL] = requestsDB[myL].filter(function(n) { return n.toLowerCase() !== fromL; });
+                writeJSON(REQUESTS_FILE, requestsDB);
+            }
+            if (data.action === 'accept') {
+                const tMy = usersDB[myL] ? usersDB[myL].username : data.user;
+                const tFr = usersDB[fromL] ? usersDB[fromL].username : data.from;
+                if (!friendsDB[myL]) friendsDB[myL] = [];
+                if (!friendsDB[myL].includes(tFr)) friendsDB[myL].push(tFr);
+                if (!friendsDB[fromL]) friendsDB[fromL] = [];
+                if (!friendsDB[fromL].includes(tMy)) friendsDB[fromL].push(tMy);
+                writeJSON(FRIENDS_FILE, friendsDB);
+            }
+            res.writeHead(200); res.end('OK');
+        });
+    }
+
+    if (urlPath === '/api/friends/save' && req.method === 'POST') {
+        return readBodyJSON(req, function(err, data) {
+            if (!err && data && data.user && Array.isArray(data.friends)) {
+                friendsDB[data.user.toLowerCase()] = data.friends;
+                writeJSON(FRIENDS_FILE, friendsDB);
+            }
+            res.writeHead(200); res.end('OK');
+        });
+    }
+    if (urlPath === '/api/groups/create' && req.method === 'POST') {
+        return readBodyJSON(req, function(err, data) {
+            if (err || !data || !data.creator || !data.groupName || !Array.isArray(data.members)) { res.writeHead(400); return res.end('Bad'); }
+            const groupId = 'group_' + crypto.randomBytes(6).toString('hex');
+            if (!data.members.map(function(m) { return m.toLowerCase(); }).includes(data.creator.toLowerCase())) data.members.push(data.creator);
+            groupsDB[groupId] = { name: data.groupName, members: data.members, creator: data.creator };
+            writeJSON(GROUPS_FILE, groupsDB);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, groupId: groupId }));
+        });
+    }
+
+    if (urlPath === '/api/groups/delete' && req.method === 'POST') {
+        return readBodyJSON(req, function(err, data) {
+            if (!err && data && data.groupId && groupsDB[data.groupId]) {
+                delete groupsDB[data.groupId]; writeJSON(GROUPS_FILE, groupsDB);
+                if (roomsDB[data.groupId]) { delete roomsDB[data.groupId]; writeJSON(CHAT_ROOMS_FILE, roomsDB); }
+            }
+            res.writeHead(200); res.end('OK');
+        });
+    }
+
+    if (urlPath === '/api/messages/delete' && req.method === 'POST') {
+        return readBodyJSON(req, function(err, data) {
+            if (!err && data && data.room && data.messageId && roomsDB[data.room]) {
+                roomsDB[data.room] = roomsDB[data.room].filter(function(m) { return m.id !== data.messageId; });
+                writeJSON(CHAT_ROOMS_FILE, roomsDB);
+            }
+            res.writeHead(200); res.end('OK');
+        });
+    }
+
+    if (urlPath === '/api/messages' && req.method === 'GET') {
+        const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
+        const room = myUrl.searchParams.get('room');
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
+        return res.end(JSON.stringify(room ? (roomsDB[room] || []) : []));
+    }
+    if (urlPath === '/api/messages/read' && req.method === 'POST') {
+        return readBodyJSON(req, function(err, data) {
+            if (!err && data && data.user && data.room) {
+                const myL = data.user.toLowerCase();
+                if (!db.lastRead[myL]) db.lastRead[myL] = {};
+                db.lastRead[myL][data.room] = Date.now();
+            }
+            res.writeHead(200); res.end('OK');
+        });
+    }
+
+    if (urlPath === '/api/send' && req.method === 'POST') {
+        return handleMultipartSend(req, res);
+    }
+
+    if (urlPath.startsWith('/uploads/')) {
+        const fileName = path.basename(urlPath);
+        const filePath = path.join(UPLOADS_DIR, fileName);
+        fs.readFile(filePath, function(err, data) {
+            if (err) { res.writeHead(404); return res.end('File Not Found'); }
+            let contentType = 'application/octet-stream';
+            const ext = path.extname(urlPath).toLowerCase();
+            if (ext === '.mp4') contentType = 'video/mp4';
+            else if (ext === '.webm') contentType = urlPath.includes('audio') ? 'audio/webm;codecs=opus' : 'video/webm;codecs=vp8,opus';
+            else if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+            else if (ext === '.png') contentType = 'image/png';
+            else if (ext === '.gif') contentType = 'image/gif';
+            else if (ext === '.pdf') contentType = 'application/pdf';
+            res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'max-age=86400', 'Accept-Ranges': 'bytes' });
+            res.end(data);
+        });
+        return;
+    }
+
+    fs.readFile(path.join(__dirname, 'index.html'), function(err, data) {
+        if (err) {
+            res.writeHead(500);
+            res.end('Error loading index.html');
+        } else {
+            res.writeHead(200, {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'
+            });
+            res.end(data);
+        }
+    });
+});
+function buildChatPreviewItem(name, roomId, myLowerName, myLastReadTime, isGroup) {
+    const roomMessages = roomsDB[roomId] || [];
+    let lastMsgText = "Нет сообщений", lastMsgTime = "", unreadCount = 0;
+    if (roomMessages.length > 0) {
+        const lastMsg = roomMessages.at(-1);
+        const prefix = isGroup ? (lastMsg.sender + ': ') : '';
+        if (lastMsg.type === 'audio') lastMsgText = "🎙️ " + prefix + "Голосовое";
+        else if (lastMsg.type === 'video') lastMsgText = "🎥 " + prefix + "Кружок";
+        else if (lastMsg.type === 'file') lastMsgText = "📎 " + prefix + "Файл";
+        else lastMsgText = prefix + (lastMsg.text || "");
+        lastMsgTime = lastMsg.time || "";
+        roomMessages.forEach(function(msg) {
+            if (msg.sender.toLowerCase() !== myLowerName && (msg.timestamp || 0) > myLastReadTime) unreadCount++;
+        });
+    }
+    const uInfo = !isGroup ? (usersDB[name.toLowerCase()] || {}) : {};
+    return {
+        id: isGroup ? roomId : undefined,
+        name: name,
+        unit: uInfo.unit || '',
+        avatar: uInfo.avatar || '',
+        lastMessage: lastMsgText,
+        time: lastMsgTime,
+        unread: unreadCount,
+        isGroup: isGroup
+    };
+}
+function handleMultipartSend(req, res) {
+    const contentType = req.headers['content-type'] || '';
+    const boundaryMatch = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/);
+    const boundaryStr = boundaryMatch ? (boundaryMatch.at(1) || boundaryMatch.at(2)) : null;
+    if (!boundaryStr) { res.writeHead(400); return res.end('No boundary'); }
+    const boundary = Buffer.from('--' + boundaryStr);
+    const chunks = new Array();
+    req.on('data', function(chunk) { chunks.push(chunk); });
+    req.on('end', function() {
+        const buffer = Buffer.concat(chunks);
+        let fields = {}, fileBuffer = null, fileExt = 'bin', originalFileName = '';
+        let start = 0, end = buffer.indexOf(boundary, start);
+        const doubleCRLF = Buffer.from('\r\n\r\n');
+        while (end !== -1) {
+            const part = buffer.subarray(start, end);
+            const headerEndIndex = part.indexOf(doubleCRLF);
+            if (headerEndIndex !== -1) {
+                const headerStr = part.subarray(0, headerEndIndex).toString('utf-8');
+                const bodyStart = headerEndIndex + 4, bodyEnd = part.length - 2;
+                if (bodyEnd > bodyStart && headerStr.includes('name="')) {
+                    const nameMatch = headerStr.match(/name="([^"]+)"/);
+                    if (nameMatch) {
+                        const fieldName = nameMatch.at(1);
+                        if (headerStr.includes('filename="')) {
+                            const fnMatch = headerStr.match(/filename="([^"]+)"/);
+                            if (fnMatch) {
+                                originalFileName = fnMatch.at(1);
+                                if (originalFileName.includes('.')) fileExt = originalFileName.split('.').pop();
+                                fileBuffer = part.subarray(bodyStart, bodyEnd);
+                            }
+                        } else {
+                            fields[fieldName] = part.subarray(bodyStart, bodyEnd).toString('utf-8');
+                        }
+                    }
+                }
+            }
+            start = end + boundary.length;
+            end = buffer.indexOf(boundary, start);
+        }
+        saveMultipartChatMsg(fields, fileBuffer, fileExt, originalFileName, res);
+    });
+}
+function saveMultipartChatMsg(fields, fileBuffer, fileExt, originalFileName, res) {
+    const sender = fields.sender, room = fields.room, type = fields.type || 'text';
+    if (!sender || !room) { res.writeHead(400); return res.end('Incomplete'); }
+    let finalContent = fields.text || '';
+    if ((type === 'audio' || type === 'video' || type === 'file') && fileBuffer && fileBuffer.length > 0) {
+        const fileName = type + '_' + crypto.randomBytes(8).toString('hex') + '.' + fileExt;
+        fs.writeFileSync(path.join(UPLOADS_DIR, fileName), fileBuffer);
+        finalContent = (type === 'file') ? JSON.stringify({ path: '/uploads/' + fileName, name: originalFileName }) : ('/uploads/' + fileName);
+    }
+    const timeStr = getServerDateTime();
+    if (!roomsDB[room]) roomsDB[room] = new Array();
+    roomsDB[room].push({
+        id: crypto.randomBytes(8).toString('hex'),
+        sender: sender,
+        text: finalContent,
+        type: type,
+        time: timeStr,
+        timestamp: Date.now(),
+        forwardedFrom: fields.forwardedFrom || null,
+        quoteId: fields.quoteId || null,
+        quoteText: fields.quoteText || null,
+        quoteSender: fields.quoteSender || null
+    });
+    if (roomsDB[room].length > 150) roomsDB[room].shift();
+    writeJSON(CHAT_ROOMS_FILE, roomsDB);
+
+    notifyJournalFromMessenger(room, sender, finalContent, type, timeStr);
+    res.writeHead(200); res.end('OK');
+}
+
+function notifyJournalFromMessenger(room, sender, rawContent, type, timeStr) {
+    let cleanText = rawContent || '';
+    if (type === 'audio') cleanText = '🎙️ Голосовое сообщение в Мессенджере';
+    else if (type === 'video') cleanText = '🎥 Видео-кружок в Мессенджере';
+    else if (type === 'file') cleanText = '📎 Файл в Мессенджере';
+    else cleanText = '💬 Мессенджер: ' + cleanText;
+
+    let targets = new Array();
+    if (groupsDB[room]) {
+        targets = groupsDB[room].members.filter(function(m) { return m.toLowerCase() !== sender.toLowerCase(); });
+    } else {
+        const parts = room.split('_').at(0).split(',');
+        targets = parts.filter(function(n) { return n.toLowerCase() !== sender.toLowerCase(); });
+    }
+    targets.forEach(function(t) {
+        const uObj = usersDB[t.toLowerCase()];
+        const realTarget = uObj ? uObj.username : t.toUpperCase();
+        broadcastAlert(sender, '#00a884', timeStr, realTarget, cleanText);
+    });
+}
+const wss = new WebSocket.Server({ server: server, maxPayload: 20 * 1024 * 1024 });
+
+function broadcastWS(obj) {
+    const str = JSON.stringify(obj);
+    wss.clients.forEach(function(client) {
+        if (client.readyState === WebSocket.OPEN) client.send(str);
+    });
+}
+
+function getIsoDateNow() {
+    const d = new Date(Date.now() + 3 * 3600 * 1000);
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0');
+}
+
+let currentActiveDay = getIsoDateNow();
+if (tableHistory.length > 0 && !archiveHistory[currentActiveDay]) {
+    archiveHistory[currentActiveDay] = tableHistory.slice();
+    writeJSON(ARCHIVE_FILE, archiveHistory);
+}
+
+setInterval(function() {
+    const todayIso = getIsoDateNow();
+    if (todayIso !== currentActiveDay) {
+        if (tableHistory.length > 0) {
+            archiveHistory[currentActiveDay] = tableHistory.slice();
+            writeJSON(ARCHIVE_FILE, archiveHistory);
+        }
+        currentActiveDay = todayIso;
+        tableHistory = new Array();
+        writeJSON(DB_FILE, tableHistory);
+        broadcastWS({ type: 'daily_archived', date: currentActiveDay });
+    }
+}, 30000);
+
+notificationsHistory.forEach(function(n) {
+    if (!n.read) {
+        if (!Array.isArray(activeAlerts[n.target])) activeAlerts[n.target] = new Array();
+        activeAlerts[n.target].push({ id: n.id, text: n.text, sender: n.sender, readList: new Array() });
+    }
+});
+function saveAndBroadcastMap(msg) {
+    const timeStr = msg.time || getServerDateTime();
+    const mapItem = { id: Date.now(), sender: msg.sender || 'АДМИН', target: msg.target || 'ВСЕМ', time: timeStr, image: msg.image };
+    mapsHistory.push(mapItem);
+    if (mapsHistory.length > 18) mapsHistory = mapsHistory.slice(-18);
+    writeJSON(MAPS_FILE, mapsHistory);
+    broadcastWS({ type: 'new_map', target: mapItem.target });
+    broadcastAlert(msg.sender || 'АДМИН', msg.color || '#8b5cf6', timeStr, msg.target || 'ВСЕМ', '🗺️ ЗАГРУЖЕНА НОВАЯ ВВОДНАЯ / КАРТА! Откройте раздел "ВВОДНЫЕ / КАРТА"');
+}
+
+function broadcastAlert(sender, color, timeStr, target, text) {
+    const notifId = Date.now() + Math.floor(Math.random() * 1000);
+    const newNotif = { id: notifId, time: timeStr, sender: sender, color: color, target: target, text: text, read: false, readBy: '' };
+    notificationsHistory.push(newNotif);
+    if (notificationsHistory.length > 200) notificationsHistory = notificationsHistory.slice(-200);
+    writeJSON(NOTIFS_FILE, notificationsHistory);
+
+    if (!Array.isArray(activeAlerts[target])) activeAlerts[target] = new Array();
+    activeAlerts[target].push({ id: notifId, text: text, sender: sender, readList: new Array() });
+    broadcastWS({ type: 'admin_alert', sender: sender, target: target, text: text, notif: newNotif });
+
+    const payload = JSON.stringify({ title: '🛑 СООБЩЕНИЕ ДЛЯ [' + target + ']!', body: sender + ': ' + text });
+    const pushOptions = { TTL: 3600, headers: { 'Urgency': 'high' } };
+    const tLow = String(target).toLowerCase();
+    pushSubscriptions.forEach(function(item, index) {
+        const uLow = String(item.user || '').toLowerCase();
+        const cLow = String(item.callsign || '').toLowerCase();
+        if (target === 'ВСЕМ' || uLow === tLow || cLow === tLow) {
+            webpush.sendNotification(item.sub, payload, pushOptions).catch(function(err) {
+                if (err.statusCode === 410 || err.statusCode === 404) {
+                    pushSubscriptions.splice(index, 1);
+                    writeJSON(SUBS_FILE, pushSubscriptions);
+                }
+            });
+        }
+    });
+}
+wss.on('connection', function(ws) {
+    ws.send(JSON.stringify({
+        type: 'init',
+        data: tableHistory,
+        notifications: notificationsHistory,
+        alerts: activeAlerts,
+        streamState: streamState,
+        vapidPublicKey: vapidKeys.publicKey
+    }));
+
+    ws.on('message', function(message) {
+        try {
+            const msg = JSON.parse(message.toString());
+            if (msg.type === 'ping') {
+                ws.send(JSON.stringify({ type: 'pong' }));
+                return;
+            }
+            if (msg.type === 'save_sub' && msg.sub) {
+                const idx = pushSubscriptions.findIndex(function(s) { return s.sub && s.sub.endpoint === msg.sub.endpoint; });
+                if (idx !== -1) {
+                    pushSubscriptions.at(idx).user = msg.user;
+                    pushSubscriptions.at(idx).callsign = msg.callsign || '';
+                } else {
+                    pushSubscriptions.push({ user: msg.user, callsign: msg.callsign || '', sub: msg.sub });
+                }
+                writeJSON(SUBS_FILE, pushSubscriptions);
+                return;
+            }
+            if (msg.type === 'add_row') {
+                const newRow = { id: Date.now(), time: getServerDateTime(), user: msg.user, values: msg.values, color: msg.color };
+                tableHistory.push(newRow);
+                writeJSON(DB_FILE, tableHistory);
+                const dayKey = getIsoDateNow();
+                if (!Array.isArray(archiveHistory[dayKey])) archiveHistory[dayKey] = new Array();
+                archiveHistory[dayKey].push(newRow);
+                writeJSON(ARCHIVE_FILE, archiveHistory);
+                broadcastWS({ type: 'new_row', row: newRow });
+            }
+            if (msg.type === 'upload_map' && msg.image) {
+                saveAndBroadcastMap(msg);
+            }
+            if (msg.type === 'stream_start') {
+                streamState = { active: true, url: msg.url };
+                broadcastWS({ type: 'stream_state', streamState: streamState });
+                const timeStr = getServerDateTime();
+                broadcastAlert(msg.sender || 'АДМИН', msg.color || '#ef4444', timeStr, 'ВСЕМ', '🎥 НАЧАЛСЯ ВИДЕОСТРИМ МСБ-55115! Нажмите кнопку "ПЕРЕЙТИ ПО ССЫЛКЕ"');
+            }
+            if (msg.type === 'stream_stop') {
+                streamState = { active: false, url: '' };
+                broadcastWS({ type: 'stream_state', streamState: streamState });
+            }
+            if (msg.type === 'clear_history') {
+                tableHistory = new Array();
+                notificationsHistory = new Array();
+                mapsHistory = new Array();
+                activeAlerts = {};
+                writeJSON(DB_FILE, tableHistory);
+                writeJSON(NOTIFS_FILE, notificationsHistory);
+                writeJSON(MAPS_FILE, mapsHistory);
+                broadcastWS({ type: 'history_cleared' });
+            }
+            if (msg.type === 'admin_alert') {
+                const sender = msg.sender || 'АДМИН';
+                const color = msg.color || '#ef4444';
+                const timeStr = getServerDateTime();
+                broadcastAlert(sender, color, timeStr, msg.target, msg.text);
+            }
+            if (msg.type === 'clear_alert') {
+                const now = new Date();
+                const tStr = msg.readTime || now.toLocaleTimeString().slice(0, 5);
+                const whoStr = msg.readBy || 'Просмотр';
+                const stamp = whoStr + ' ' + tStr;
+
+                if (Array.isArray(activeAlerts[msg.target])) {
+                    if (msg.target === 'ВСЕМ') {
+                        activeAlerts[msg.target].forEach(function(a) {
+                            if (!msg.notifId || a.id === msg.notifId) {
+                                if (!Array.isArray(a.readList)) a.readList = new Array();
+                                if (a.readList.indexOf(whoStr) === -1) a.readList.push(whoStr);
+                            }
+                        });
+                    } else {
+                        if (msg.notifId) activeAlerts[msg.target] = activeAlerts[msg.target].filter(function(a) { return a.id !== msg.notifId; });
+                        else activeAlerts[msg.target].shift();
+                        if (activeAlerts[msg.target].length === 0) delete activeAlerts[msg.target];
+                    }
+                } else {
+                    delete activeAlerts[msg.target];
+                }
+
+                let updatedReadBy = stamp, marked = false;
+                notificationsHistory.forEach(function(n) {
+                    const match = (msg.notifId && n.id === msg.notifId) || (!msg.notifId && !marked && n.target === msg.target);
+                    if (match) {
+                        n.read = true;
+                        if (n.target === 'ВСЕМ') {
+                            if (!n.readBy) n.readBy = stamp;
+                            else if (n.readBy.indexOf(whoStr) === -1) n.readBy = n.readBy + ', ' + stamp;
+                        } else {
+                            n.readBy = stamp;
+                        }
+                        updatedReadBy = n.readBy;
+                        marked = true;
+                    }
+                });
+                writeJSON(NOTIFS_FILE, notificationsHistory);
+                broadcastWS({ type: 'alert_cleared', target: msg.target, notifId: msg.notifId || null, who: whoStr, readBy: updatedReadBy });
+            }
+        } catch (e) { console.error("WS error:", e); }
+    });
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', function() {
+    console.log('🚀 ЕДИНЫЙ СЕРВЕР МСБ-55115 (ЖУРНАЛ + МЕССЕНДЖЕР) ЗАПУЩЕН НА ПОРТУ ' + PORT);
+});
