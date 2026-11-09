@@ -184,7 +184,7 @@ function renderFriends() {
         item.onclick = function() { selectChat(friend); };
         const badgeHTML = (friend.unread > 0 && !isActive) ? ('<div class="unread-badge">' + friend.unread + '</div>') : '';
         const timeHTML = friend.time ? ('<div class="friend-time-label">' + friend.time + '</div>') : '';
-        const unitTag = (!friend.isGroup && friend.unit) ? (' <span style="color:#38bdf8;font-size:12px;">[' + friend.unit + ']</span>') : '';
+        const unitTag = (!friend.isGroup && friend.unit) ? (' <span style="color:#38bdf8;font-size:12px;">(' + friend.unit + ')</span>') : '';
         const displayName = (friend.isGroup ? ('👥 ' + friend.name) : friend.name) + unitTag;
         const avInner = friend.avatar ? ('<img src="' + friend.avatar + '" alt="av">') : friend.name.substring(0, 2).toUpperCase();
         const friendDataEscaped = JSON.stringify({ id: friend.id, name: friend.name, isGroup: friend.isGroup }).replace(/"/g, '&quot;');
