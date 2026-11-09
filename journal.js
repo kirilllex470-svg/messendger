@@ -245,7 +245,7 @@ function updateLockScreenAlert(target, text, sender) {
         });
     }
 }
-const SOUND_PRESETS = [
+const SOUND_PRESETS = Array.of(
     { id: 'alarm1', name: '🚨 Тревога 1 (Сирена МСБ — стандарт)', type: 'alarm' },
     { id: 'alarm2', name: '🚨 Тревога 2 (Двойной радарный импульс)', type: 'alarm' },
     { id: 'nice1',  name: '🎵 Красивый 1 (Хрустальный аккорд)', type: 'nice' },
@@ -253,7 +253,7 @@ const SOUND_PRESETS = [
     { id: 'nice3',  name: '🎵 Красивый 3 (Тёплая маримба)', type: 'nice' },
     { id: 'bank1',  name: '🏦 Банк 1 (Сбер / Перевод зачислен)', type: 'bank' },
     { id: 'bank2',  name: '🏦 Банк 2 (Премиум Банк / Push)', type: 'bank' }
-];
+);
 
 function playToneNotes(notes, waveType) {
     try {
@@ -285,55 +285,55 @@ function playSoundById(soundId, isPreview) {
         }
         if (id === 'alarm1') {
             if (!isPreview && sirenAudio) sirenAudio.play().catch(function() {});
-            playToneNotes([
+            playToneNotes(Array.of(
                 { f: 880, fEnd: 1140, t: 0, d: 0.25, v: 0.4, type: 'sawtooth' },
                 { f: 1140, fEnd: 880, t: 0.25, d: 0.25, v: 0.4, type: 'sawtooth' }
-            ]);
+            ));
         } else if (id === 'alarm2') {
             if (sirenAudio) sirenAudio.pause();
-            playToneNotes([
+            playToneNotes(Array.of(
                 { f: 960, t: 0, d: 0.14, v: 0.45, type: 'square' },
                 { f: 960, t: 0.18, d: 0.14, v: 0.45, type: 'square' },
                 { f: 1280, t: 0.38, d: 0.28, v: 0.45, type: 'square' }
-            ]);
+            ));
         } else if (id === 'nice1') {
             if (sirenAudio) sirenAudio.pause();
-            playToneNotes([
+            playToneNotes(Array.of(
                 { f: 523.25, t: 0, d: 0.45, v: 0.3, type: 'sine' },
                 { f: 659.25, t: 0.10, d: 0.45, v: 0.3, type: 'sine' },
                 { f: 783.99, t: 0.20, d: 0.55, v: 0.3, type: 'sine' },
                 { f: 1046.50, t: 0.30, d: 0.70, v: 0.35, type: 'sine' }
-            ]);
+            ));
         } else if (id === 'nice2') {
             if (sirenAudio) sirenAudio.pause();
-            playToneNotes([
+            playToneNotes(Array.of(
                 { f: 440, t: 0, d: 0.35, v: 0.3, type: 'triangle' },
                 { f: 554.37, t: 0.18, d: 0.35, v: 0.3, type: 'triangle' },
                 { f: 659.25, t: 0.36, d: 0.65, v: 0.35, type: 'triangle' }
-            ]);
+            ));
         } else if (id === 'nice3') {
             if (sirenAudio) sirenAudio.pause();
-            playToneNotes([
+            playToneNotes(Array.of(
                 { f: 587.33, t: 0, d: 0.22, v: 0.35, type: 'sine' },
                 { f: 880, t: 0.14, d: 0.22, v: 0.35, type: 'sine' },
                 { f: 739.99, t: 0.28, d: 0.22, v: 0.35, type: 'sine' },
                 { f: 1174.66, t: 0.42, d: 0.55, v: 0.4, type: 'sine' }
-            ]);
+            ));
         } else if (id === 'bank1') {
             if (sirenAudio) sirenAudio.pause();
-            playToneNotes([
+            playToneNotes(Array.of(
                 { f: 783.99, t: 0, d: 0.16, v: 0.4, type: 'sine' },
                 { f: 1567.98, t: 0, d: 0.12, v: 0.15, type: 'triangle' },
                 { f: 1174.66, t: 0.14, d: 0.48, v: 0.45, type: 'sine' },
                 { f: 2349.32, t: 0.14, d: 0.35, v: 0.18, type: 'triangle' }
-            ]);
+            ));
         } else if (id === 'bank2') {
             if (sirenAudio) sirenAudio.pause();
-            playToneNotes([
+            playToneNotes(Array.of(
                 { f: 1046.50, t: 0, d: 0.11, v: 0.38, type: 'sine' },
                 { f: 1318.51, t: 0.09, d: 0.11, v: 0.38, type: 'sine' },
                 { f: 1567.98, t: 0.18, d: 0.45, v: 0.45, type: 'sine' }
-            ]);
+            ));
         }
     } catch (e) {}
 }
@@ -368,6 +368,7 @@ function closeSoundModal() {
     const modal = document.getElementById('sound-modal');
     if (modal) modal.style.display = 'none';
 }
+
 function handleStreamBtnClick() {
     if (currentUser === ADMIN_NAME) {
         const box = document.getElementById('admin-stream-box');
