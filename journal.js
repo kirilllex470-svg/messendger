@@ -24,7 +24,7 @@ const COLUMNS_CONFIG = [
     ]},
     { label: "НОМЕР ТОЧКИ", options: new Array(), digitsOnly: true },
     { label: "ЛЕСОПОЛОСА", options: [
-        "ФАКС", "ЗУБР1", "ПОЭТ", "СУДЬЯ", "СОР4", "СМОГ-1", "ЗАЯЦ", "ЗАМЕНА", "КРАСКА",
+        "ФАКС", "ЗУБР1", "ПОЭТ", "СУДЬЯ", "СОР4", "СМОГ-1", "КИЛТ", "ЗАЯЦ", "ЗАМЕНА", "КРАСКА",
         "МАСТАК1", "ВОЛК3", "АНГЕЛ", "ВАЛИК1", "ЛЕЖАК", "ЛОТ ", "ПРИНТ7",
         "ГОН1", "СТОП-3", "ТАБЛА", "ПОКЕР", "ЛОКОН", "КАЛЫМ", "КАРМАН1",
         "ИРБИС", "СЕЗОН", "КАРАЗ", "КВАС", "КАФР", "СТЕНА", "ТРАКТ",
@@ -33,7 +33,7 @@ const COLUMNS_CONFIG = [
         "КАБАН-3", "ЛИС-1", "ЛИС-2", "ЛИС-3",
         "-->ФАКС", "-->ЗУБР1", "-->ПОЭТ", "-->ЗАЯЦ", "-->СМОГ-1", "-->СУДЬЯ", "-->СОР4",
         "-->ЗАМЕНА", "-->КРАСКА", "-->МАСТАК1", "-->ВОЛК3", "-->АНГЕЛ",
-        "-->ВАЛИК1", "-->ЛЕЖАК", "-->ЛОТ ", "-->ПРИНТ7", "-->ГОН1",
+        "-->ВАЛИК1", "-->ЛЕЖАК", "-->ЛОТ ", "-->КИЛТ", "-->ПРИНТ7", "-->ГОН1",
         "-->СТОП-3", "-->ТАБЛА", "-->ПОКЕР", "-->ЛОКОН", "-->КАЛЫМ",
         "-->КАРМАН1", "-->ИРБИС", "-->СЕЗОН", "-->КАРАЗ", "-->КВАС",
         "-->КАФР", "-->СТЕНА", "-->ТРАКТ", "-->СЛЕЖКА", "-->МОНАРХ",
@@ -47,7 +47,8 @@ let ws = null;
 let currentUser = null;
 let currentCallsign = "";
 let userColor = '#fff';
-let myPermissions = { row: false, stream: false, maps: false, archive: false };
+let myPermissions = { row: false, stream: false, maps: false, archive: false, table: false };
+let selectedSoundId = localStorage.getItem('msb_sound_id') || 'alarm1';
 let myMessengerFriends = new Array();
 let allUsersAvatars = {};
 let currentAlertId = null;
@@ -109,7 +110,6 @@ function runSplash() {
         }
     }, 200);
 }
-
 window.addEventListener('beforeinstallprompt', function(e) {
     e.preventDefault();
     deferredPrompt = e;
@@ -245,23 +245,128 @@ function updateLockScreenAlert(target, text, sender) {
         });
     }
 }
+const SOUND_PRESETS = [
+    { id: 'alarm1', name: '🚨 Тревога 1 (Сирена МСБ — стандарт)', type: 'alarm' },
+    { id: 'alarm2', name: '🚨 Тревога 2 (Двойной радарный импульс)', type: 'alarm' },
+    { id: 'nice1',  name: '🎵 Красивый 1 (Хрустальный аккорд)', type: 'nice' },
+    { id: 'nice2',  name: '🎵 Красивый 2 (Космическое эхо)', type: 'nice' },
+    { id: 'nice3',  name: '🎵 Красивый 3 (Тёплая маримба)', type: 'nice' },
+    { id: 'bank1',  name: '🏦 Банк 1 (Сбер / Перевод зачислен)', type: 'bank' },
+    { id: 'bank2',  name: '🏦 Банк 2 (Премиум Банк / Push)', type: 'bank' }
+];
 
-function playBeep() {
+function playToneNotes(notes, waveType) {
     try {
-        if (navigator.vibrate) navigator.vibrate(Array.of(600, 200, 600));
-        if (sirenAudio) sirenAudio.play().catch(function() {});
         if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
         if (audioCtx.state === 'suspended') audioCtx.resume();
-        const osc = audioCtx.createOscillator();
-        const gain = audioCtx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(880, audioCtx.currentTime);
-        gain.gain.setValueAtTime(0.4, audioCtx.currentTime);
-        osc.connect(gain);
-        gain.connect(audioCtx.destination);
-        osc.start();
-        setTimeout(function() { osc.stop(); }, 450);
-    } catch(e) {}
+        const now = audioCtx.currentTime;
+        notes.forEach(function(n) {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = n.type || waveType || 'sine';
+            osc.frequency.setValueAtTime(n.f, now + n.t);
+            if (n.fEnd) osc.frequency.exponentialRampToValueAtTime(n.fEnd, now + n.t + n.d);
+            gain.gain.setValueAtTime(0.001, now + n.t);
+            gain.gain.linearRampToValueAtTime(n.v || 0.35, now + n.t + 0.02);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + n.t + n.d);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start(now + n.t);
+            osc.stop(now + n.t + n.d + 0.02);
+        });
+    } catch (e) {}
+}
+
+function playSoundById(soundId, isPreview) {
+    const id = soundId || selectedSoundId || 'alarm1';
+    try {
+        if (navigator.vibrate) {
+            navigator.vibrate(id.startsWith('alarm') ? Array.of(600, 200, 600) : Array.of(200, 100, 200));
+        }
+        if (id === 'alarm1') {
+            if (!isPreview && sirenAudio) sirenAudio.play().catch(function() {});
+            playToneNotes([
+                { f: 880, fEnd: 1140, t: 0, d: 0.25, v: 0.4, type: 'sawtooth' },
+                { f: 1140, fEnd: 880, t: 0.25, d: 0.25, v: 0.4, type: 'sawtooth' }
+            ]);
+        } else if (id === 'alarm2') {
+            if (sirenAudio) sirenAudio.pause();
+            playToneNotes([
+                { f: 960, t: 0, d: 0.14, v: 0.45, type: 'square' },
+                { f: 960, t: 0.18, d: 0.14, v: 0.45, type: 'square' },
+                { f: 1280, t: 0.38, d: 0.28, v: 0.45, type: 'square' }
+            ]);
+        } else if (id === 'nice1') {
+            if (sirenAudio) sirenAudio.pause();
+            playToneNotes([
+                { f: 523.25, t: 0, d: 0.45, v: 0.3, type: 'sine' },
+                { f: 659.25, t: 0.10, d: 0.45, v: 0.3, type: 'sine' },
+                { f: 783.99, t: 0.20, d: 0.55, v: 0.3, type: 'sine' },
+                { f: 1046.50, t: 0.30, d: 0.70, v: 0.35, type: 'sine' }
+            ]);
+        } else if (id === 'nice2') {
+            if (sirenAudio) sirenAudio.pause();
+            playToneNotes([
+                { f: 440, t: 0, d: 0.35, v: 0.3, type: 'triangle' },
+                { f: 554.37, t: 0.18, d: 0.35, v: 0.3, type: 'triangle' },
+                { f: 659.25, t: 0.36, d: 0.65, v: 0.35, type: 'triangle' }
+            ]);
+        } else if (id === 'nice3') {
+            if (sirenAudio) sirenAudio.pause();
+            playToneNotes([
+                { f: 587.33, t: 0, d: 0.22, v: 0.35, type: 'sine' },
+                { f: 880, t: 0.14, d: 0.22, v: 0.35, type: 'sine' },
+                { f: 739.99, t: 0.28, d: 0.22, v: 0.35, type: 'sine' },
+                { f: 1174.66, t: 0.42, d: 0.55, v: 0.4, type: 'sine' }
+            ]);
+        } else if (id === 'bank1') {
+            if (sirenAudio) sirenAudio.pause();
+            playToneNotes([
+                { f: 783.99, t: 0, d: 0.16, v: 0.4, type: 'sine' },
+                { f: 1567.98, t: 0, d: 0.12, v: 0.15, type: 'triangle' },
+                { f: 1174.66, t: 0.14, d: 0.48, v: 0.45, type: 'sine' },
+                { f: 2349.32, t: 0.14, d: 0.35, v: 0.18, type: 'triangle' }
+            ]);
+        } else if (id === 'bank2') {
+            if (sirenAudio) sirenAudio.pause();
+            playToneNotes([
+                { f: 1046.50, t: 0, d: 0.11, v: 0.38, type: 'sine' },
+                { f: 1318.51, t: 0.09, d: 0.11, v: 0.38, type: 'sine' },
+                { f: 1567.98, t: 0.18, d: 0.45, v: 0.45, type: 'sine' }
+            ]);
+        }
+    } catch (e) {}
+}
+
+function playBeep() {
+    playSoundById(selectedSoundId, false);
+}
+
+function openSoundModal() {
+    const modal = document.getElementById('sound-modal');
+    const list = document.getElementById('sound-options-list');
+    if (!modal || !list) return;
+    list.innerHTML = '';
+    SOUND_PRESETS.forEach(function(s) {
+        const isSel = (s.id === selectedSoundId);
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 12px; border-radius:8px; cursor:pointer; background:' + (isSel ? 'rgba(59,130,246,0.22)' : '#0f172a') + '; border:1px solid ' + (isSel ? '#38bdf8' : '#334155') + ';';
+        row.innerHTML = '<span style="color:#f8fafc; font-size:13px; font-weight:' + (isSel ? 'bold' : 'normal') + ';">' + (isSel ? '🔘 ' : '⚪ ') + s.name + '</span>' +
+            '<button type="button" style="width:auto; padding:6px 12px; background:#0284c7; font-size:12px; border-radius:6px;">▶️ Тест</button>';
+        row.onclick = function() {
+            selectedSoundId = s.id;
+            localStorage.setItem('msb_sound_id', s.id);
+            playSoundById(s.id, true);
+            openSoundModal();
+        };
+        list.appendChild(row);
+    });
+    modal.style.display = 'flex';
+}
+
+function closeSoundModal() {
+    const modal = document.getElementById('sound-modal');
+    if (modal) modal.style.display = 'none';
 }
 function handleStreamBtnClick() {
     if (currentUser === ADMIN_NAME) {
@@ -299,7 +404,6 @@ function openActiveStreamWindow() {
         window.open(activeStream.url, '_blank', 'noopener,noreferrer,width=1100,height=750');
     }
 }
-
 function startVideoStream() {
     if (currentUser !== ADMIN_NAME) return;
     const url = document.getElementById('stream-url-input').value.trim();
@@ -344,6 +448,7 @@ function updateStreamUI() {
         if (viewerPanel) viewerPanel.style.display = 'none';
     }
 }
+
 function toggleMapsSection() {
     const box = document.getElementById('maps-section-box');
     if (!box) return;
@@ -358,7 +463,6 @@ function isMapVisibleForMe(m) {
     if (currentUser && (m.target === currentUser || m.sender === currentUser)) return true;
     return false;
 }
-
 let photoZoom = 1, photoPanX = 0, photoPanY = 0, isDraggingPhoto = false, dragStartX = 0, dragStartY = 0, zoomEventsBound = false;
 
 function applyPhotoTransform() {
@@ -592,6 +696,7 @@ function isNotificationVisibleForMe(notif) {
     if (currentCallsign && (notif.target === currentCallsign || notif.sender === currentCallsign)) return true;
     return false;
 }
+
 function renderNotificationsWindow() {
     const list = document.getElementById('notifications-list');
     if (!list) return;
@@ -639,7 +744,6 @@ function getAlertsQueue(target) {
     if (typeof raw === 'string') return Array.of({ id: null, text: raw, sender: ADMIN_NAME, readList: new Array() });
     return Array.of(raw);
 }
-
 function connectWS() {
     if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
     ws = new WebSocket(location.origin.replace(/^http/, 'ws'));
@@ -683,7 +787,6 @@ function connectWS() {
             refreshMyPermissionsFromServer();
             if (typeof loadFriendsAndRequests === 'function') loadFriendsAndRequests();
         }
-
         if (msg.type === 'history_cleared') {
             document.getElementById('table-body').innerHTML = '';
             allNotifications = new Array();
@@ -761,6 +864,7 @@ function handleAlertClearedMsg(msg) {
     }
     checkAndShowAlerts(false);
 }
+
 function populateTargetSelect() {
     const adminSelect = document.getElementById('admin-target');
     const miniSelect = document.getElementById('mini-notif-target');
@@ -802,13 +906,13 @@ function populateTargetSelect() {
         });
     }
 }
-
 function applyPermissionsUI() {
     const isAdmin = (currentUser === ADMIN_NAME);
     const canRow = isAdmin || (myPermissions && myPermissions.row);
     const canStream = isAdmin || (myPermissions && myPermissions.stream);
     const canMaps = isAdmin || (myPermissions && myPermissions.maps);
     const canArchive = isAdmin || (myPermissions && myPermissions.archive);
+    const canTable = isAdmin || (myPermissions && myPermissions.table);
 
     const gridEl = document.getElementById('dynamic-inputs');
     const sendBtn = document.querySelector('.send-btn');
@@ -816,6 +920,7 @@ function applyPermissionsUI() {
     const mapsBtn = document.getElementById('maps-main-btn');
     const archBtn = document.querySelector('.archive-main-btn');
     const notifArchBtn = document.getElementById('notif-archive-btn');
+    const tableSection = document.getElementById('journal-table-section');
 
     if (gridEl) gridEl.style.display = canRow ? 'grid' : 'none';
     if (sendBtn) sendBtn.style.display = canRow ? 'block' : 'none';
@@ -823,6 +928,7 @@ function applyPermissionsUI() {
     if (mapsBtn) mapsBtn.style.display = canMaps ? 'block' : 'none';
     if (archBtn) archBtn.style.display = canArchive ? 'block' : 'none';
     if (notifArchBtn) notifArchBtn.style.display = canArchive ? 'inline-block' : 'none';
+    if (tableSection) tableSection.style.display = canTable ? 'block' : 'none';
 }
 
 function applyUserUI() {
@@ -968,10 +1074,11 @@ function submitRegistration() {
         }
     });
 }
+
 function refreshMyPermissionsFromServer() {
     if (!currentCallsign) return;
     if (currentUser === ADMIN_NAME) {
-        myPermissions = { row: true, stream: true, maps: true, archive: true };
+        myPermissions = { row: true, stream: true, maps: true, archive: true, table: true };
         applyPermissionsUI();
         return;
     }
@@ -1000,7 +1107,7 @@ function attemptLogin() {
     }
 
     if (unitObj.name === ADMIN_NAME && pass === "551150000" && (!callsignInput || callsignInput.toLowerCase() === "муравей")) {
-        myPermissions = { row: true, stream: true, maps: true, archive: true };
+        myPermissions = { row: true, stream: true, maps: true, archive: true, table: true };
         completeLoginSuccess(ADMIN_NAME, "муравей", unitObj.color);
         return;
     }
@@ -1019,7 +1126,7 @@ function attemptLogin() {
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.success) {
-            myPermissions = data.permissions || { row: false, stream: false, maps: false, archive: false };
+            myPermissions = data.permissions || { row: false, stream: false, maps: false, archive: false, table: false };
             completeLoginSuccess(unitObj.name, data.username || callsignInput, unitObj.color);
         } else {
             errEl.innerText = '❌ ' + (data.message || 'Неверный пароль или позывной не одобрен');
@@ -1046,7 +1153,6 @@ function completeLoginSuccess(unitName, callsign, color) {
     subscribeToWebPush();
     checkAndShowAlerts(false);
 }
-
 function openAdminUsersModal() {
     if (currentUser !== ADMIN_NAME) return;
     document.getElementById('admin-users-modal').style.display = 'flex';
@@ -1058,10 +1164,11 @@ function closeAdminUsersModal() {
 }
 
 function renderPermCheckboxes(u) {
-    const p = u.permissions || { row: false, stream: false, maps: false, archive: false };
+    const p = u.permissions || { row: false, stream: false, maps: false, archive: false, table: false };
     const k = u.key;
     return '<div class="perm-grid">' +
         '<label class="perm-chip"><input type="checkbox" ' + (p.row ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'row\', this.checked)"> 📤 Запись в журнал</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.table ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'table\', this.checked)"> 📊 Таблица журнала</label>' +
         '<label class="perm-chip"><input type="checkbox" ' + (p.stream ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'stream\', this.checked)"> 🎥 Видеострим</label>' +
         '<label class="perm-chip"><input type="checkbox" ' + (p.maps ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'maps\', this.checked)"> 🗺️ Вводные/Карта</label>' +
         '<label class="perm-chip"><input type="checkbox" ' + (p.archive ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'archive\', this.checked)"> 🗂️ Архив</label>' +
@@ -1133,7 +1240,6 @@ function loginAsViewer() {
     subscribeToWebPush();
     checkAndShowAlerts(false);
 }
-
 function sendAdminAlert() {
     if (!currentUser) return;
     const target = document.getElementById('admin-target').value;
