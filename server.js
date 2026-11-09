@@ -55,7 +55,7 @@ usersDB['муравей'] = {
     unit: 'АДМИН',
     approved: true,
     avatar: (usersDB['муравей'] && usersDB['муравей'].avatar) ? usersDB['муравей'].avatar : '',
-    permissions: { row: true, stream: true, maps: true, archive: true }
+    permissions: { row: true, stream: true, maps: true, archive: true, table: true }
 };
 writeJSON(USERS_FILE, usersDB);
 
@@ -175,6 +175,7 @@ const SW_CODE = [
     "    }));",
     "});"
 ].join('\n');
+
 function readBodyJSON(req, cb) {
     let body = '';
     req.on('data', function(chunk) { body += chunk.toString(); });
@@ -182,7 +183,6 @@ function readBodyJSON(req, cb) {
         try { cb(null, JSON.parse(body)); } catch (e) { cb(e, null); }
     });
 }
-
 const server = http.createServer(function(req, res) {
     const urlPath = (req.url || '/').split('?').at(0);
 
@@ -228,7 +228,7 @@ const server = http.createServer(function(req, res) {
                 unit: data.unit,
                 approved: false,
                 avatar: '',
-                permissions: { row: false, stream: false, maps: false, archive: false }
+                permissions: { row: false, stream: false, maps: false, archive: false, table: false }
             };
             writeJSON(USERS_FILE, usersDB);
             broadcastWS({ type: 'users_updated' });
@@ -237,7 +237,6 @@ const server = http.createServer(function(req, res) {
             res.end(JSON.stringify({ success: true }));
         });
     }
-
     if (req.method === 'POST' && urlPath === '/api/auth/login') {
         return readBodyJSON(req, function(err, data) {
             if (err || !data || !data.username || !data.password) {
@@ -262,10 +261,11 @@ const server = http.createServer(function(req, res) {
                 success: true,
                 username: u.username,
                 unit: u.unit,
-                permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
+                permissions: u.permissions || { row: false, stream: false, maps: false, archive: false, table: false }
             }));
         });
     }
+
     if (req.method === 'GET' && urlPath === '/api/user/me') {
         const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
         const user = (myUrl.searchParams.get('user') || '').toLowerCase();
@@ -274,19 +274,7 @@ const server = http.createServer(function(req, res) {
         return res.end(JSON.stringify({
             avatar: u.avatar || '',
             unit: u.unit || '',
-            permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
-        }));
-    }
-
-     if (urlPath === '/api/user/me' && req.method === 'GET') {
-        const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
-        const user = (myUrl.searchParams.get('user') || '').toLowerCase();
-        const u = usersDB[user] || {};
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
-        return res.end(JSON.stringify({
-            avatar: u.avatar || '',
-            unit: u.unit || '',
-            permissions: u.permissions || { row: false, stream: false, maps: false, archive: false }
+            permissions: u.permissions || { row: false, stream: false, maps: false, archive: false, table: false }
         }));
     }
 
@@ -308,7 +296,7 @@ const server = http.createServer(function(req, res) {
         const pending = new Array(), approved = new Array();
         Object.keys(usersDB).forEach(function(k) {
             const u = usersDB[k];
-            const item = { key: k, username: u.username, password: u.password, unit: u.unit || '—', permissions: u.permissions || { row: false, stream: false, maps: false, archive: false } };
+            const item = { key: k, username: u.username, password: u.password, unit: u.unit || '—', permissions: u.permissions || { row: false, stream: false, maps: false, archive: false, table: false } };
             if (u.approved === false) pending.push(item);
             else approved.push(item);
         });
@@ -322,7 +310,7 @@ const server = http.createServer(function(req, res) {
                 if (data.action === 'approve') usersDB[data.key].approved = true;
                 else if (data.action === 'delete') delete usersDB[data.key];
                 else if (data.action === 'set_perm' && data.permName) {
-                    if (!usersDB[data.key].permissions) usersDB[data.key].permissions = { row: false, stream: false, maps: false, archive: false };
+                    if (!usersDB[data.key].permissions) usersDB[data.key].permissions = { row: false, stream: false, maps: false, archive: false, table: false };
                     usersDB[data.key].permissions[data.permName] = Boolean(data.permVal);
                 }
                 writeJSON(USERS_FILE, usersDB);
@@ -332,7 +320,6 @@ const server = http.createServer(function(req, res) {
             res.end(JSON.stringify({ ok: true }));
         });
     }
-
     if (req.method === 'GET' && urlPath === '/maps-list') {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         return res.end(JSON.stringify(mapsHistory));
@@ -359,7 +346,7 @@ const server = http.createServer(function(req, res) {
         return;
     }
 
-     if (urlPath === '/api/friends/get' && req.method === 'GET') {
+    if (urlPath === '/api/friends/get' && req.method === 'GET') {
         const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
         const user = myUrl.searchParams.get('user');
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
@@ -389,22 +376,21 @@ const server = http.createServer(function(req, res) {
             }
             const targetKey = data.to.trim().toLowerCase();
             const stdUnits = ['шр', 'рота-1', 'рота-2', 'рота-3', 'админ'];
-            
-            // Проверяем наличие позывного в зарегистрированных или штатных подразделениях
             if (!usersDB[targetKey] && !stdUnits.includes(targetKey)) {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
                 return res.end(JSON.stringify({ success: false, message: 'Позывной или Подразделение не найдены в системе!' }));
             }
             if (!requestsDB[targetKey]) requestsDB[targetKey] = [];
-            if (!requestsDB[targetKey].includes(data.from)) {
-                requestsDB[targetKey].push(data.from);
+            const alreadyRequested = requestsDB[targetKey].some(function(n) { return n.toLowerCase() === data.from.trim().toLowerCase(); });
+            if (!alreadyRequested) {
+                requestsDB[targetKey].push(data.from.trim());
                 writeJSON(REQUESTS_FILE, requestsDB);
             }
+            broadcastWS({ type: 'users_updated' });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true }));
         });
     }
-
     if (urlPath === '/api/friends/requests' && req.method === 'GET') {
         const myUrl = new URL(req.url, 'http://' + (req.headers.host || 'localhost'));
         const user = myUrl.searchParams.get('user');
@@ -424,11 +410,12 @@ const server = http.createServer(function(req, res) {
                 const tMy = usersDB[myL] ? usersDB[myL].username : data.user;
                 const tFr = usersDB[fromL] ? usersDB[fromL].username : data.from;
                 if (!friendsDB[myL]) friendsDB[myL] = [];
-                if (!friendsDB[myL].includes(tFr)) friendsDB[myL].push(tFr);
+                if (!friendsDB[myL].some(function(n) { return n.toLowerCase() === fromL; })) friendsDB[myL].push(tFr);
                 if (!friendsDB[fromL]) friendsDB[fromL] = [];
-                if (!friendsDB[fromL].includes(tMy)) friendsDB[fromL].push(tMy);
+                if (!friendsDB[fromL].some(function(n) { return n.toLowerCase() === myL; })) friendsDB[fromL].push(tMy);
                 writeJSON(FRIENDS_FILE, friendsDB);
             }
+            broadcastWS({ type: 'users_updated' });
             res.writeHead(200); res.end('OK');
         });
     }
@@ -438,10 +425,12 @@ const server = http.createServer(function(req, res) {
             if (!err && data && data.user && Array.isArray(data.friends)) {
                 friendsDB[data.user.toLowerCase()] = data.friends;
                 writeJSON(FRIENDS_FILE, friendsDB);
+                broadcastWS({ type: 'users_updated' });
             }
             res.writeHead(200); res.end('OK');
         });
     }
+
     if (urlPath === '/api/groups/create' && req.method === 'POST') {
         return readBodyJSON(req, function(err, data) {
             if (err || !data || !data.creator || !data.groupName || !Array.isArray(data.members)) { res.writeHead(400); return res.end('Bad'); }
@@ -449,6 +438,7 @@ const server = http.createServer(function(req, res) {
             if (!data.members.map(function(m) { return m.toLowerCase(); }).includes(data.creator.toLowerCase())) data.members.push(data.creator);
             groupsDB[groupId] = { name: data.groupName, members: data.members, creator: data.creator };
             writeJSON(GROUPS_FILE, groupsDB);
+            broadcastWS({ type: 'users_updated' });
             res.writeHead(200, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ success: true, groupId: groupId }));
         });
@@ -459,11 +449,11 @@ const server = http.createServer(function(req, res) {
             if (!err && data && data.groupId && groupsDB[data.groupId]) {
                 delete groupsDB[data.groupId]; writeJSON(GROUPS_FILE, groupsDB);
                 if (roomsDB[data.groupId]) { delete roomsDB[data.groupId]; writeJSON(CHAT_ROOMS_FILE, roomsDB); }
+                broadcastWS({ type: 'users_updated' });
             }
             res.writeHead(200); res.end('OK');
         });
     }
-
     if (urlPath === '/api/messages/delete' && req.method === 'POST') {
         return readBodyJSON(req, function(err, data) {
             if (!err && data && data.room && data.messageId && roomsDB[data.room]) {
@@ -480,6 +470,7 @@ const server = http.createServer(function(req, res) {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-cache' });
         return res.end(JSON.stringify(room ? (roomsDB[room] || []) : []));
     }
+
     if (urlPath === '/api/messages/read' && req.method === 'POST') {
         return readBodyJSON(req, function(err, data) {
             if (!err && data && data.user && data.room) {
@@ -527,6 +518,7 @@ const server = http.createServer(function(req, res) {
         }
     });
 });
+
 function buildChatPreviewItem(name, roomId, myLowerName, myLastReadTime, isGroup) {
     const roomMessages = roomsDB[roomId] || [];
     let lastMsgText = "Нет сообщений", lastMsgTime = "", unreadCount = 0;
@@ -596,6 +588,7 @@ function handleMultipartSend(req, res) {
         saveMultipartChatMsg(fields, fileBuffer, fileExt, originalFileName, res);
     });
 }
+
 function saveMultipartChatMsg(fields, fileBuffer, fileExt, originalFileName, res) {
     const sender = fields.sender, room = fields.room, type = fields.type || 'text';
     if (!sender || !room) { res.writeHead(400); return res.end('Incomplete'); }
@@ -621,7 +614,6 @@ function saveMultipartChatMsg(fields, fileBuffer, fileExt, originalFileName, res
     });
     if (roomsDB[room].length > 150) roomsDB[room].shift();
     writeJSON(CHAT_ROOMS_FILE, roomsDB);
-
     notifyJournalFromMessenger(room, sender, finalContent, type, timeStr);
     res.writeHead(200); res.end('OK');
 }
@@ -632,7 +624,6 @@ function notifyJournalFromMessenger(room, sender, rawContent, type, timeStr) {
     else if (type === 'video') cleanText = '🎥 Видео-кружок в Мессенджере';
     else if (type === 'file') cleanText = '📎 Файл в Мессенджере';
     else cleanText = '💬 Мессенджер: ' + cleanText;
-
     let targets = new Array();
     if (groupsDB[room]) {
         targets = groupsDB[room].members.filter(function(m) { return m.toLowerCase() !== sender.toLowerCase(); });
@@ -686,6 +677,7 @@ notificationsHistory.forEach(function(n) {
         activeAlerts[n.target].push({ id: n.id, text: n.text, sender: n.sender, readList: new Array() });
     }
 });
+
 function saveAndBroadcastMap(msg) {
     const timeStr = msg.time || getServerDateTime();
     const mapItem = { id: Date.now(), sender: msg.sender || 'АДМИН', target: msg.target || 'ВСЕМ', time: timeStr, image: msg.image };
@@ -723,6 +715,7 @@ function broadcastAlert(sender, color, timeStr, target, text) {
         }
     });
 }
+
 wss.on('connection', function(ws) {
     ws.send(JSON.stringify({
         type: 'init',
@@ -736,18 +729,11 @@ wss.on('connection', function(ws) {
     ws.on('message', function(message) {
         try {
             const msg = JSON.parse(message.toString());
-            if (msg.type === 'ping') {
-                ws.send(JSON.stringify({ type: 'pong' }));
-                return;
-            }
+            if (msg.type === 'ping') { ws.send(JSON.stringify({ type: 'pong' })); return; }
             if (msg.type === 'save_sub' && msg.sub) {
                 const idx = pushSubscriptions.findIndex(function(s) { return s.sub && s.sub.endpoint === msg.sub.endpoint; });
-                if (idx !== -1) {
-                    pushSubscriptions.at(idx).user = msg.user;
-                    pushSubscriptions.at(idx).callsign = msg.callsign || '';
-                } else {
-                    pushSubscriptions.push({ user: msg.user, callsign: msg.callsign || '', sub: msg.sub });
-                }
+                if (idx !== -1) { pushSubscriptions.at(idx).user = msg.user; pushSubscriptions.at(idx).callsign = msg.callsign || ''; }
+                else { pushSubscriptions.push({ user: msg.user, callsign: msg.callsign || '', sub: msg.sub }); }
                 writeJSON(SUBS_FILE, pushSubscriptions);
                 return;
             }
@@ -761,41 +747,29 @@ wss.on('connection', function(ws) {
                 writeJSON(ARCHIVE_FILE, archiveHistory);
                 broadcastWS({ type: 'new_row', row: newRow });
             }
-            if (msg.type === 'upload_map' && msg.image) {
-                saveAndBroadcastMap(msg);
-            }
+            if (msg.type === 'upload_map' && msg.image) saveAndBroadcastMap(msg);
             if (msg.type === 'stream_start') {
                 streamState = { active: true, url: msg.url };
                 broadcastWS({ type: 'stream_state', streamState: streamState });
-                const timeStr = getServerDateTime();
-                broadcastAlert(msg.sender || 'АДМИН', msg.color || '#ef4444', timeStr, 'ВСЕМ', '🎥 НАЧАЛСЯ ВИДЕОСТРИМ МСБ-55115! Нажмите кнопку "ПЕРЕЙТИ ПО ССЫЛКЕ"');
+                broadcastAlert(msg.sender || 'АДМИН', msg.color || '#ef4444', getServerDateTime(), 'ВСЕМ', '🎥 НАЧАЛСЯ ВИДЕОСТРИМ МСБ-55115! Нажмите кнопку "ПЕРЕЙТИ ПО ССЫЛКЕ"');
             }
             if (msg.type === 'stream_stop') {
                 streamState = { active: false, url: '' };
                 broadcastWS({ type: 'stream_state', streamState: streamState });
             }
             if (msg.type === 'clear_history') {
-                tableHistory = new Array();
-                notificationsHistory = new Array();
-                mapsHistory = new Array();
-                activeAlerts = {};
-                writeJSON(DB_FILE, tableHistory);
-                writeJSON(NOTIFS_FILE, notificationsHistory);
-                writeJSON(MAPS_FILE, mapsHistory);
+                tableHistory = new Array(); notificationsHistory = new Array(); mapsHistory = new Array(); activeAlerts = {};
+                writeJSON(DB_FILE, tableHistory); writeJSON(NOTIFS_FILE, notificationsHistory); writeJSON(MAPS_FILE, mapsHistory);
                 broadcastWS({ type: 'history_cleared' });
             }
             if (msg.type === 'admin_alert') {
-                const sender = msg.sender || 'АДМИН';
-                const color = msg.color || '#ef4444';
-                const timeStr = getServerDateTime();
-                broadcastAlert(sender, color, timeStr, msg.target, msg.text);
+                broadcastAlert(msg.sender || 'АДМИН', msg.color || '#ef4444', getServerDateTime(), msg.target, msg.text);
             }
             if (msg.type === 'clear_alert') {
                 const now = new Date();
                 const tStr = msg.readTime || now.toLocaleTimeString().slice(0, 5);
                 const whoStr = msg.readBy || 'Просмотр';
                 const stamp = whoStr + ' ' + tStr;
-
                 if (Array.isArray(activeAlerts[msg.target])) {
                     if (msg.target === 'ВСЕМ') {
                         activeAlerts[msg.target].forEach(function(a) {
@@ -809,9 +783,7 @@ wss.on('connection', function(ws) {
                         else activeAlerts[msg.target].shift();
                         if (activeAlerts[msg.target].length === 0) delete activeAlerts[msg.target];
                     }
-                } else {
-                    delete activeAlerts[msg.target];
-                }
+                } else { delete activeAlerts[msg.target]; }
 
                 let updatedReadBy = stamp, marked = false;
                 notificationsHistory.forEach(function(n) {
@@ -821,9 +793,7 @@ wss.on('connection', function(ws) {
                         if (n.target === 'ВСЕМ') {
                             if (!n.readBy) n.readBy = stamp;
                             else if (n.readBy.indexOf(whoStr) === -1) n.readBy = n.readBy + ', ' + stamp;
-                        } else {
-                            n.readBy = stamp;
-                        }
+                        } else { n.readBy = stamp; }
                         updatedReadBy = n.readBy;
                         marked = true;
                     }
