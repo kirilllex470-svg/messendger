@@ -51,6 +51,7 @@ let myPermissions = { row: false, stream: false, maps: false, archive: false, ta
 let selectedSoundId = localStorage.getItem('msb_sound_id') || 'alarm1';
 let myMessengerFriends = new Array();
 let allUsersAvatars = {};
+let lastTargetOptionsSig = "";
 let currentAlertId = null;
 let currentAlertText = "";
 let currentAlertTarget = "";
@@ -66,10 +67,26 @@ let activeStream = { active: false, url: "" };
 let titleInterval = null;
 let soundInterval = null;
 let audioCtx = null;
-let keepAliveAudio = null;
 let sirenAudio = null;
 let publicVapidKey = null;
 let deferredPrompt = null;
+let knownServerBootId = sessionStorage.getItem('msb_server_boot_id') || null;
+let pendingServerBootId = null;
+
+function saveLocalJournalCache(key, data) {
+    try {
+        localStorage.setItem('msb_jcache_' + key, JSON.stringify(data));
+    } catch (e) {}
+}
+
+function loadLocalJournalCache(key, fallback) {
+    try {
+        const raw = localStorage.getItem('msb_jcache_' + key);
+        return raw ? JSON.parse(raw) : fallback;
+    } catch (e) {
+        return fallback;
+    }
+}
 
 function getStaticDateTime() {
     const d = new Date();
@@ -80,7 +97,6 @@ function getStaticDateTime() {
     const min = String(d.getMinutes()).padStart(2, '0');
     return dd + '.' + mm + '.' + yyyy + ' ' + hh + ':' + min;
 }
-
 const SPLASH_FILES = Array.of(
     "boot/kernel_msb55115.sys", "crypto/cipher_channel_v4.dat", "net/websocket_sync_protocol.dll",
     "maps/tactical_forest_sectors.db", "auth/unit_credentials_guard.bin", "push/vapid_service_worker.js",
@@ -102,14 +118,15 @@ function runSplash() {
         if (p) p.innerText = 'ЗАГРУЗКА СИСТЕМЫ: ' + cur + '%';
         const idx = Math.min(Math.floor((cur / 100) * SPLASH_FILES.length), SPLASH_FILES.length - 1);
         if (f) f.innerText = SPLASH_FILES.at(idx);
-        if (g) g.innerText = (cur < 100) ? (cur + '%') : 'ГОТОВО';
+        if (g) g.innerText = (cur < 100) ? '[' + cur + '%]' : '[ГОТОВО]';
         if (cur >= 100) {
             clearInterval(timer);
             s.style.opacity = '0';
             setTimeout(function() { s.style.display = 'none'; }, 500);
         }
-    }, 200);
+    }, 20);
 }
+
 window.addEventListener('beforeinstallprompt', function(e) {
     e.preventDefault();
     deferredPrompt = e;
@@ -134,7 +151,6 @@ async function installPWA() {
         alert('Чтобы установить приложение МСБ55115, откройте меню браузера (⋮ или "Поделиться") и нажмите "Установить приложение" / "Добавить на главный экран".');
     }
 }
-
 function urlBase64ToUint8Array(base64String) {
     const padding = '='.repeat((4 - base64String.length % 4) % 4);
     const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -170,26 +186,9 @@ async function subscribeToWebPush() {
                 }));
             }
         }
-    } catch (e) { console.error('Push error:', e); }
+    } catch (e) {}
 }
 
-function sendLocalNotification(target, text, sender) {
-    const fromWho = sender || 'АДМИН';
-    const title = '🛑 ТРЕВОГА ДЛЯ (' + target + ')!';
-    const body = fromWho + ': ' + text;
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.ready.then(function(reg) {
-            reg.showNotification(title, {
-                body: body,
-                vibrate: Array.of(800, 200, 800, 200, 800, 200, 1000),
-                silent: false,
-                requireInteraction: true,
-                renotify: true,
-                tag: 'admin-alert-' + Date.now()
-            }).catch(function() {});
-        });
-    }
-}
 function createWavUrl(freq, durationSec, volume) {
     const sr = 8000;
     const numSamples = sr * durationSec;
@@ -211,24 +210,13 @@ function createWavUrl(freq, durationSec, volume) {
     }
     return URL.createObjectURL(new Blob(Array.of(buf), { type: 'audio/wav' }));
 }
-
 function unlockMobileFeatures() {
     try {
-        if (!keepAliveAudio) {
-            keepAliveAudio = new Audio(createWavUrl(100, 1, 0.0001));
-            keepAliveAudio.loop = true;
-        }
-        keepAliveAudio.play().catch(function() {});
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
         if (!sirenAudio) {
             sirenAudio = new Audio(createWavUrl(880, 1, 0.9));
             sirenAudio.loop = true;
-        }
-        if ('mediaSession' in navigator) {
-            navigator.mediaSession.metadata = new MediaMetadata({
-                title: '🟢 Дежурный режим активен',
-                artist: 'Журнал Работ (Ожидание команд)',
-                album: 'Нажмите, чтобы открыть'
-            });
         }
     } catch(e) {}
     if ('wakeLock' in navigator) {
@@ -236,15 +224,6 @@ function unlockMobileFeatures() {
     }
 }
 
-function updateLockScreenAlert(target, text, sender) {
-    if ('mediaSession' in navigator) {
-        navigator.mediaSession.metadata = new MediaMetadata({
-            title: '🛑 ТРЕВОГА ДЛЯ (' + target + ') ОТ (' + (sender || 'АДМИН') + ')!',
-            artist: text,
-            album: 'СРОЧНО ОТКРОЙТЕ БРАУЗЕР!'
-        });
-    }
-}
 const SOUND_PRESETS = Array.of(
     { id: 'alarm1', name: '🚨 Тревога 1 (Сирена МСБ — стандарт)', type: 'alarm' },
     { id: 'alarm2', name: '🚨 Тревога 2 (Двойной радарный импульс)', type: 'alarm' },
@@ -276,7 +255,6 @@ function playToneNotes(notes, waveType) {
         });
     } catch (e) {}
 }
-
 function playSoundById(soundId, isPreview) {
     const id = soundId || selectedSoundId || 'alarm1';
     try {
@@ -323,7 +301,7 @@ function playSoundById(soundId, isPreview) {
             if (sirenAudio) sirenAudio.pause();
             playToneNotes(Array.of(
                 { f: 783.99, t: 0, d: 0.16, v: 0.4, type: 'sine' },
-                { f: 1567.98, t: 0, d: 0.12, v: 0.15, type: 'triangle' },
+                { f: 1567.98, t: 0.12, d: 0.15, v: 0.18, type: 'triangle' },
                 { f: 1174.66, t: 0.14, d: 0.48, v: 0.45, type: 'sine' },
                 { f: 2349.32, t: 0.14, d: 0.35, v: 0.18, type: 'triangle' }
             ));
@@ -341,7 +319,6 @@ function playSoundById(soundId, isPreview) {
 function playBeep() {
     playSoundById(selectedSoundId, false);
 }
-
 function openSoundModal() {
     const modal = document.getElementById('sound-modal');
     const list = document.getElementById('sound-options-list');
@@ -368,6 +345,7 @@ function closeSoundModal() {
     const modal = document.getElementById('sound-modal');
     if (modal) modal.style.display = 'none';
 }
+
 function handleStreamBtnClick() {
     if (currentUser === ADMIN_NAME) {
         const box = document.getElementById('admin-stream-box');
@@ -398,7 +376,6 @@ function openStreamExternalFallback() {
     const url = (activeStream && activeStream.url) ? activeStream.url : document.getElementById('stream-url-input').value.trim();
     if (url) window.open(url, '_blank', 'noopener,noreferrer,width=1100,height=750');
 }
-
 function openActiveStreamWindow() {
     if (activeStream && activeStream.url) {
         window.open(activeStream.url, '_blank', 'noopener,noreferrer,width=1100,height=750');
@@ -449,6 +426,7 @@ function updateStreamUI() {
         if (viewerPanel) viewerPanel.style.display = 'none';
     }
 }
+
 function toggleMapsSection() {
     const box = document.getElementById('maps-section-box');
     if (!box) return;
@@ -461,9 +439,9 @@ function isMapVisibleForMe(m) {
     if (m.target === "ВСЕМ") return true;
     if (currentUser === ADMIN_NAME) return true;
     if (currentUser && (m.target === currentUser || m.sender === currentUser)) return true;
+    if (currentCallsign && (m.target === currentCallsign || m.sender === currentCallsign)) return true;
     return false;
 }
-
 let photoZoom = 1, photoPanX = 0, photoPanY = 0, isDraggingPhoto = false, dragStartX = 0, dragStartY = 0, zoomEventsBound = false;
 
 function applyPhotoTransform() {
@@ -533,24 +511,48 @@ function renderMapsGrid() {
         const tile = document.createElement('div');
         tile.className = 'map-tile';
         const badge = (idx === 0) ? '<span class="map-tile-fresh">СВЕЖЕЕ</span>' : '';
-        tile.innerHTML = badge + '<img src="' + m.image + '" alt="Карта"><div class="map-tile-overlay"><span class="map-tile-time">🕒 ' + m.time + '</span><span class="map-tile-target">' + m.target + '</span></div>';
-        tile.onclick = function() { openPhotoLightbox(m.image, 'КОМУ: ' + m.target + ' | ВРЕМЯ: ' + m.time); };
+        tile.innerHTML =
+            badge +
+            '<img src="' + m.image + '" alt="Карта">' +
+            '<div class="map-tile-overlay">' +
+                '<span class="map-tile-time">🕒 ' + m.time + '</span>' +
+                '<span class="map-tile-target">' + m.target + '</span>' +
+            '</div>';
+        tile.onclick = function() {
+            openPhotoLightbox(m.image, 'КОМУ: ' + m.target + ' | ВРЕМЯ: ' + m.time);
+        };
         grid.appendChild(tile);
     });
 }
 
 function fetchMapsFromServer() {
+    if (allMaps.length === 0) {
+        const cachedMaps = loadLocalJournalCache('maps', new Array());
+        if (Array.isArray(cachedMaps) && cachedMaps.length > 0) {
+            allMaps = cachedMaps;
+            renderMapsGrid();
+        }
+    }
     fetch('/maps-list?t=' + Date.now())
         .then(function(r) { return r.json(); })
-        .then(function(list) { if (Array.isArray(list)) { allMaps = list; renderMapsGrid(); } })
+        .then(function(list) {
+            if (Array.isArray(list)) {
+                allMaps = list;
+                saveLocalJournalCache('maps', list);
+                renderMapsGrid();
+            }
+        })
         .catch(function() {});
 }
-
 function uploadMapPhoto() {
-    if (currentUser !== ADMIN_NAME) return alert('Загружать карты может только АДМИН!');
+    if (currentUser !== ADMIN_NAME) {
+        return alert('Загружать карты может только АДМИН!');
+    }
     const fileInput = document.getElementById('map-file-input');
     const targetSelect = document.getElementById('map-target-select');
-    if (!fileInput || !fileInput.files || fileInput.files.length === 0) return alert('Сначала выберите фотографию или карту!');
+    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        return alert('Сначала выберите фотографию или карту!');
+    }
     const file = fileInput.files.item(0);
     const target = (targetSelect && targetSelect.value) ? targetSelect.value : 'ВСЕМ';
     const reader = new FileReader();
@@ -558,13 +560,21 @@ function uploadMapPhoto() {
         const img = new Image();
         img.onload = function() {
             const canvas = document.createElement('canvas');
-            const maxW = 750, maxH = 750;
-            let w = img.width || 600, h = img.height || 600;
+            const maxW = 750;
+            const maxH = 750;
+            let w = img.width || 600;
+            let h = img.height || 600;
             if (w > maxW || h > maxH) {
-                if (w > h) { h = Math.round(h * (maxW / w)); w = maxW; }
-                else { w = Math.round(w * (maxH / h)); h = maxH; }
+                if (w > h) {
+                    h = Math.round(h * (maxW / w));
+                    w = maxW;
+                } else {
+                    w = Math.round(w * (maxH / h));
+                    h = maxH;
+                }
             }
-            canvas.width = w; canvas.height = h;
+            canvas.width = w;
+            canvas.height = h;
             canvas.getContext('2d').drawImage(img, 0, 0, w, h);
             const finalDataUrl = canvas.toDataURL('image/jpeg', 0.65);
             const now = new Date();
@@ -572,21 +582,37 @@ function uploadMapPhoto() {
             fetch('/upload-map', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ sender: currentUser, color: userColor, target: target, time: timeStr, image: finalDataUrl })
+                body: JSON.stringify({
+                    sender: currentUser,
+                    color: userColor,
+                    target: target,
+                    time: timeStr,
+                    image: finalDataUrl
+                })
             })
             .then(function(res) { return res.json(); })
             .then(function(data) {
                 fileInput.value = '';
-                if (data && Array.isArray(data.maps)) { allMaps = data.maps; renderMapsGrid(); }
-                else fetchMapsFromServer();
+                if (data && Array.isArray(data.maps)) {
+                    allMaps = data.maps;
+                    saveLocalJournalCache('maps', data.maps);
+                    renderMapsGrid();
+                } else {
+                    fetchMapsFromServer();
+                }
             })
-            .catch(function() { alert('Ошибка при отправке фото на сервер!'); });
+            .catch(function() {
+                alert('Ошибка при отправке фото на сервер!');
+            });
         };
         img.src = e.target.result;
     };
     reader.readAsDataURL(file);
 }
-const MONTH_NAMES = Array.of("ЯНВАРЬ", "ФЕВРАЛЬ", "МАРТ", "АПРЕЛЬ", "МАЙ", "ИЮНЬ", "ИЮЛЬ", "АВГУСТ", "СЕНТЯБРЬ", "ОКТЯБРЬ", "НОЯБРЬ", "ДЕКАБРЬ");
+const MONTH_NAMES = Array.of(
+    "ЯНВАРЬ", "ФЕВРАЛЬ", "МАРТ", "АПРЕЛЬ", "МАЙ", "ИЮНЬ",
+    "ИЮЛЬ", "АВГУСТ", "СЕНТЯБРЬ", "ОКТЯБРЬ", "НОЯБРЬ", "ДЕКАБРЬ"
+);
 
 function formatIsoDate(y, m, d) {
     return y + '-' + String(m + 1).padStart(2, '0') + '-' + String(d).padStart(2, '0');
@@ -599,13 +625,24 @@ function formatRuDateFromIso(iso) {
 }
 
 function fetchArchiveFromServer(cb) {
+    if (Object.keys(archiveData).length === 0) {
+        const cachedArch = loadLocalJournalCache('archive', {});
+        if (cachedArch && typeof cachedArch === 'object' && Object.keys(cachedArch).length > 0) {
+            archiveData = cachedArch;
+            renderArchiveCalendar();
+            if (selectedArchiveDate) selectArchiveDate(selectedArchiveDate);
+        }
+    }
     fetch('/archive-data?t=' + Date.now())
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data && typeof data === 'object') {
                 archiveData = data;
+                saveLocalJournalCache('archive', data);
                 renderArchiveCalendar();
-                if (selectedArchiveDate) selectArchiveDate(selectedArchiveDate);
+                if (selectedArchiveDate) {
+                    selectArchiveDate(selectedArchiveDate);
+                }
                 if (cb) cb();
             }
         }).catch(function() {});
@@ -615,11 +652,16 @@ function openArchivePage() {
     const page = document.getElementById('archive-page');
     if (!page) return;
     const now = new Date();
-    calYear = now.getFullYear(); calMonth = now.getMonth();
+    calYear = now.getFullYear();
+    calMonth = now.getMonth();
     const todayKey = formatIsoDate(calYear, calMonth, now.getDate());
-    if (!selectedArchiveDate) selectedArchiveDate = todayKey;
+    if (!selectedArchiveDate) {
+        selectedArchiveDate = todayKey;
+    }
     page.style.display = 'flex';
-    renderArchiveCalendar(); selectArchiveDate(selectedArchiveDate); fetchArchiveFromServer();
+    renderArchiveCalendar();
+    selectArchiveDate(selectedArchiveDate);
+    fetchArchiveFromServer();
 }
 
 function closeArchivePage() {
@@ -633,7 +675,6 @@ function changeArchiveMonth(delta) {
     if (calMonth > 11) { calMonth = 0; calYear++; }
     renderArchiveCalendar();
 }
-
 function renderArchiveCalendar() {
     const titleEl = document.getElementById('cal-month-label');
     const gridEl = document.getElementById('cal-days-grid');
@@ -655,10 +696,13 @@ function renderArchiveCalendar() {
         const cell = document.createElement('div');
         cell.className = 'cal-day' + (count > 0 ? ' has-data' : '') + (selectedArchiveDate === dateKey ? ' selected' : '');
         cell.innerHTML = '<span>' + d + '</span>' + (count > 0 ? '<span class="cal-dot">' + count + ' зап.</span>' : '');
-        cell.onclick = function() { selectArchiveDate(dateKey); };
+        cell.onclick = function() {
+            selectArchiveDate(dateKey);
+        };
         gridEl.appendChild(cell);
     }
 }
+
 function selectArchiveDate(dateKey) {
     selectedArchiveDate = dateKey;
     renderArchiveCalendar();
@@ -688,13 +732,16 @@ function selectArchiveDate(dateKey) {
         tbody.appendChild(tr);
     });
 }
-
 function isNotificationVisibleForMe(notif) {
     if (!notif) return false;
     if (notif.target === "ВСЕМ") return true;
     if (currentUser === ADMIN_NAME) return true;
-    if (currentUser && (notif.target === currentUser || notif.sender === currentUser)) return true;
-    if (currentCallsign && (notif.target === currentCallsign || notif.sender === currentCallsign)) return true;
+    const tLow = String(notif.target || '').trim().toLowerCase();
+    const sLow = String(notif.sender || '').trim().toLowerCase();
+    const myCallLow = String(currentCallsign || '').trim().toLowerCase();
+    const myUserLow = String(currentUser || '').trim().toLowerCase();
+    if (myCallLow && (tLow === myCallLow || sLow === myCallLow || sLow.indexOf('(' + myCallLow + ')') !== -1)) return true;
+    if (myUserLow && (tLow === myUserLow || sLow === myUserLow)) return true;
     return false;
 }
 
@@ -716,7 +763,9 @@ function renderNotificationsWindow() {
                 '<span class="notif-target">КОМУ: ' + notif.target + '</span>' +
                 '<span class="notif-text">' + notif.text + '</span>' +
                 '<span class="notif-status">' + statusText + '</span>';
-            item.onclick = function() { openMessengerWindow(notif.sender); };
+            item.onclick = function() {
+                openMessengerWindow(notif.sender);
+            };
             list.appendChild(item);
         });
         list.scrollTop = list.scrollHeight;
@@ -727,7 +776,9 @@ function renderNotificationsWindow() {
 function updateBroadcastTicker() {
     const ticker = document.getElementById('msg-broadcast-ticker');
     if (!ticker) return;
-    const allBroadcasts = allNotifications.filter(function(n) { return n && n.target === 'ВСЕМ'; }).slice(-8).reverse();
+    const allBroadcasts = allNotifications.filter(function(n) {
+        return n && n.target === 'ВСЕМ';
+    }).slice(-8).reverse();
     if (allBroadcasts.length === 0) {
         ticker.innerText = '📢 СВОДКА «ВСЕМ»: Пока нет общих оповещений...';
         return;
@@ -737,59 +788,309 @@ function updateBroadcastTicker() {
     });
     ticker.innerText = parts.join('   |   ');
 }
-
 function getAlertsQueue(target) {
-    const raw = pendingAlerts[target];
+    if (!target) return new Array();
+    const tLow = String(target).trim().toLowerCase();
+    let raw = pendingAlerts[target];
+    if (!raw) {
+        const matchKey = Object.keys(pendingAlerts).find(function(k) {
+            return k.trim().toLowerCase() === tLow;
+        });
+        if (matchKey) raw = pendingAlerts[matchKey];
+    }
     if (!raw) return new Array();
     if (Array.isArray(raw)) return raw;
+    if (typeof raw === 'string') {
+        return Array.of({ id: null, text: raw, sender: ADMIN_NAME, readList: new Array() });
+    }
     return Array.of(raw);
+}
+
+function checkServerVersionChange(bootId, bootTime) {
+    if (!bootId) return;
+    if (!knownServerBootId) {
+        knownServerBootId = bootId;
+        sessionStorage.setItem('msb_server_boot_id', bootId);
+        return;
+    }
+    if (knownServerBootId !== bootId) {
+        pendingServerBootId = bootId;
+        const modal = document.getElementById('server-update-modal');
+        const timeEl = document.getElementById('update-server-time');
+        if (timeEl) timeEl.innerText = bootTime || getStaticDateTime();
+        if (modal && modal.style.display !== 'flex') {
+            modal.style.display = 'flex';
+            playSoundById('bank2', true);
+        }
+    }
+}
+
+async function forceReloadApp() {
+    if (pendingServerBootId) {
+        sessionStorage.setItem('msb_server_boot_id', pendingServerBootId);
+    } else {
+        sessionStorage.removeItem('msb_server_boot_id');
+    }
+    try {
+        if ('caches' in window) {
+            const keys = await caches.keys();
+            for (let k of keys) {
+                if (k !== 'msb55115-media-v1') {
+                    await caches.delete(k);
+                }
+            }
+        }
+        if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations();
+            for (let r of regs) {
+                await r.unregister();
+            }
+        }
+    } catch (e) {}
+    window.location.href = window.location.pathname + '?v=' + Date.now();
+}
+let lastPongTime = Date.now();
+
+function connectWS(forceReconnect) {
+    if (forceReconnect && ws) {
+        try {
+            ws.onclose = null;
+            ws.close();
+        } catch (e) {}
+        ws = null;
+    }
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    ws = new WebSocket(location.origin.replace(/^http/, 'ws'));
+
+    ws.onopen = function() {
+        lastPongTime = Date.now();
+        subscribeToWebPush();
+    };
+
+    ws.onmessage = function(event) {
+        lastPongTime = Date.now();
+        const msg = JSON.parse(event.data);
+        if (msg.serverBootId) {
+            checkServerVersionChange(msg.serverBootId, msg.serverBootTime);
+        }
+        if (msg.type === 'pong') return;
+        if (msg.type === 'init') {
+            document.getElementById('table-body').innerHTML = '';
+            msg.data.forEach(appendRow);
+            saveLocalJournalCache('table_rows', msg.data);
+            allNotifications = msg.notifications || new Array();
+            saveLocalJournalCache('notifs', allNotifications);
+            renderNotificationsWindow();
+            fetchMapsFromServer();
+            fetchArchiveFromServer();
+            if (msg.streamState) {
+                activeStream = msg.streamState;
+                updateStreamUI();
+            }
+            if (msg.vapidPublicKey) {
+                publicVapidKey = msg.vapidPublicKey;
+                subscribeToWebPush();
+            }
+            if (msg.alerts) {
+                pendingAlerts = msg.alerts;
+                checkAndShowAlerts(true);
+            }
+            if (currentUser === ADMIN_NAME) fetchAdminUsersList();
+            refreshMyPermissionsFromServer();
+        }
+        if (msg.type === 'new_row') {
+            appendRow(msg.row);
+            const curRows = loadLocalJournalCache('table_rows', new Array());
+            curRows.push(msg.row);
+            saveLocalJournalCache('table_rows', curRows);
+            fetchArchiveFromServer();
+        }
+        if (msg.type === 'daily_archived') {
+            document.getElementById('table-body').innerHTML = '';
+            saveLocalJournalCache('table_rows', new Array());
+            fetchArchiveFromServer();
+        }
+        if (msg.type === 'new_map') {
+            fetchMapsFromServer();
+            if (!msg.target || msg.target === 'ВСЕМ' || currentUser === ADMIN_NAME || msg.target === currentUser || msg.target === currentCallsign) {
+                const box = document.getElementById('maps-section-box');
+                if (box && (currentUser === ADMIN_NAME || myPermissions.maps)) box.style.display = 'block';
+            }
+        }
+        if (msg.type === 'stream_state') {
+            activeStream = msg.streamState || { active: false, url: '' };
+            updateStreamUI();
+        }
+        if (msg.type === 'users_updated') {
+            if (currentUser === ADMIN_NAME) fetchAdminUsersList();
+            refreshMyPermissionsFromServer();
+            if (typeof loadFriendsAndRequests === 'function') loadFriendsAndRequests();
+        }
+        if (msg.type === 'history_cleared') {
+            document.getElementById('table-body').innerHTML = '';
+            allNotifications = new Array();
+            allMaps = new Array();
+            pendingAlerts = {};
+            saveLocalJournalCache('table_rows', new Array());
+            saveLocalJournalCache('notifs', new Array());
+            saveLocalJournalCache('maps', new Array());
+            stopAlertVisuals();
+            renderNotificationsWindow();
+            renderMapsGrid();
+        }
+        if (msg.type === 'admin_alert') {
+            if (msg.notif) {
+                const exists = allNotifications.some(function(n) { return n.id === msg.notif.id; });
+                if (!exists) {
+                    allNotifications.push(msg.notif);
+                    saveLocalJournalCache('notifs', allNotifications);
+                }
+                renderNotificationsWindow();
+            }
+            const queue = getAlertsQueue(msg.target);
+            const alertId = msg.notif ? msg.notif.id : Date.now();
+            if (!queue.some(function(a) { return a.id === alertId; })) {
+                queue.push({
+                    id: alertId,
+                    text: msg.text,
+                    sender: msg.sender || ADMIN_NAME,
+                    readList: new Array()
+                });
+            }
+            pendingAlerts[msg.target] = queue;
+            checkAndShowAlerts(true);
+        }
+        if (msg.type === 'alert_cleared') {
+            handleAlertClearedMsg(msg);
+        }
+    };
+
+    ws.onclose = function() {
+        setTimeout(function() { connectWS(false); }, 1500);
+    };
+}
+
+setInterval(function() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        if (Date.now() - lastPongTime > 12000) {
+            connectWS(true);
+            return;
+        }
+        ws.send(JSON.stringify({
+            type: 'ping',
+            user: currentUser || '',
+            callsign: currentCallsign || ''
+        }));
+    } else {
+        connectWS(false);
+    }
+}, 4000);
+
+window.addEventListener('online', function() {
+    connectWS(true);
+});
+
+document.addEventListener('visibilitychange', function() {
+    if (document.visibilityState === 'visible') {
+        if (!ws || ws.readyState !== WebSocket.OPEN || (Date.now() - lastPongTime > 8000)) {
+            connectWS(true);
+        } else {
+            checkAndShowAlerts(false);
+        }
+    }
+});
+function handleAlertClearedMsg(msg) {
+    const queue = getAlertsQueue(msg.target);
+    if (msg.target === 'ВСЕМ') {
+        queue.forEach(function(a) {
+            if (!msg.notifId || a.id === msg.notifId) {
+                if (!Array.isArray(a.readList)) a.readList = new Array();
+                if (msg.who && a.readList.indexOf(msg.who) === -1) a.readList.push(msg.who);
+            }
+        });
+        pendingAlerts[msg.target] = queue;
+    } else {
+        if (msg.notifId) {
+            pendingAlerts[msg.target] = queue.filter(function(a) { return a.id !== msg.notifId; });
+        } else {
+            queue.shift();
+            pendingAlerts[msg.target] = queue;
+        }
+        if (pendingAlerts[msg.target] && pendingAlerts[msg.target].length === 0) {
+            delete pendingAlerts[msg.target];
+        }
+    }
+
+    if (msg.notifId) {
+        allNotifications.forEach(function(n) {
+            if (n.id === msg.notifId) {
+                n.read = true;
+                n.readBy = msg.readBy || '';
+            }
+        });
+    } else {
+        let marked = false;
+        allNotifications.forEach(function(n) {
+            if (!marked && n.target === msg.target) {
+                n.read = true;
+                n.readBy = msg.readBy || '';
+                marked = true;
+            }
+        });
+    }
+    saveLocalJournalCache('notifs', allNotifications);
+    renderNotificationsWindow();
+
+    const myName = currentCallsign || currentUser || 'Просмотр';
+    if (currentAlertTarget === msg.target && (!msg.notifId || currentAlertId === msg.notifId)) {
+        if (msg.target !== 'ВСЕМ' || msg.who === myName || msg.who === currentUser) {
+            stopAlertVisuals();
+        }
+    }
+    checkAndShowAlerts(false);
 }
 
 function populateTargetSelect() {
     const adminSelect = document.getElementById('admin-target');
+    const miniSelect = document.getElementById('mini-notif-target');
     const mapSelect = document.getElementById('map-target-select');
-
-    if (adminSelect) {
-        const prevVal = adminSelect.value;
-        adminSelect.innerHTML = '';
-        if (currentUser === ADMIN_NAME) {
+    const onlyFriends = myMessengerFriends.filter(function(f) { return f && !f.isGroup; });
+    const sigParts = Array.of(currentUser || '');
+    onlyFriends.forEach(function(f) {
+        sigParts.push(f.name + ':' + (f.online ? '1' : '0') + ':' + (f.unit || ''));
+    });
+    const newSig = sigParts.join('|');
+    if (newSig !== lastTargetOptionsSig) {
+        lastTargetOptionsSig = newSig;
+        Array.of(adminSelect, miniSelect).forEach(function(sel) {
+            if (!sel) return;
+            const prevVal = sel.value;
+            sel.innerHTML = '';
             let optAll = document.createElement('option');
             optAll.value = "ВСЕМ";
             optAll.innerText = "📢 ВСЕМ";
-            adminSelect.appendChild(optAll);
-        }
-        const onlyFriends = myMessengerFriends.filter(function(f) { return !f.isGroup; });
-        if (onlyFriends.length === 0 && currentUser !== ADMIN_NAME) {
-            let optEmpty = document.createElement('option');
-            optEmpty.value = "";
-            optEmpty.innerText = "👥 Добавьте друзей в Мессенджере";
-            adminSelect.appendChild(optEmpty);
-        } else {
+            sel.appendChild(optAll);
             onlyFriends.forEach(function(f) {
                 let opt = document.createElement('option');
                 opt.value = f.name;
-                opt.innerText = "👤 " + f.name + (f.unit ? " [" + f.unit + "]" : "");
-                adminSelect.appendChild(opt);
+                opt.innerText = (f.online ? "🟢 " : "⚫ ") + f.name + (f.unit ? " (" + f.unit + ")" : "");
+                sel.appendChild(opt);
             });
-        }
-        if (prevVal && Array.from(adminSelect.options).some(function(o) { return o.value === prevVal; })) {
-            adminSelect.value = prevVal;
-        }
+            if (prevVal && Array.from(sel.options).some(function(o) { return o.value === prevVal; })) {
+                sel.value = prevVal;
+            }
+        });
     }
-
-    if (mapSelect) {
-        const prevMapVal = mapSelect.value;
+    if (mapSelect && mapSelect.options.length === 0) {
         mapSelect.innerHTML = '<option value="ВСЕМ">📢 ВСЕМ</option>';
         USERS_CONFIG.forEach(function(u) {
             if (u.name !== currentUser) {
                 let opt = document.createElement('option');
-                opt.value = u.name; opt.innerText = u.name;
+                opt.value = u.name;
+                opt.innerText = u.name;
                 mapSelect.appendChild(opt);
             }
         });
-        if (prevMapVal && Array.from(mapSelect.options).some(function(o) { return o.value === prevMapVal; })) {
-            mapSelect.value = prevMapVal;
-        }
     }
 }
 function applyPermissionsUI() {
@@ -801,15 +1102,24 @@ function applyPermissionsUI() {
     const canTable = isAdmin || (myPermissions && myPermissions.table);
 
     const gridEl = document.getElementById('dynamic-inputs');
-    const sendBtn = document.querySelector('.send-btn');
+    if (gridEl) gridEl.style.display = canRow ? 'grid' : 'none';
+
+    document.querySelectorAll('.send-btn, #submit-row-btn, #send-row-btn, button[onclick*="submitRow"]').forEach(function(btn) {
+        btn.style.display = canRow ? 'block' : 'none';
+    });
+
+    document.querySelectorAll('button').forEach(function(btn) {
+        if (btn.innerText && btn.innerText.includes('ЗАПИСАТЬ В ЖУРНАЛ')) {
+            btn.style.display = canRow ? 'block' : 'none';
+        }
+    });
+
     const streamBtn = document.getElementById('stream-main-btn');
     const mapsBtn = document.getElementById('maps-main-btn');
     const archBtn = document.querySelector('.archive-main-btn');
     const notifArchBtn = document.getElementById('notif-archive-btn');
     const tableSection = document.getElementById('journal-table-section');
 
-    if (gridEl) gridEl.style.display = canRow ? 'grid' : 'none';
-    if (sendBtn) sendBtn.style.display = canRow ? 'block' : 'none';
     if (streamBtn) streamBtn.style.display = canStream ? 'block' : 'none';
     if (mapsBtn) mapsBtn.style.display = canMaps ? 'block' : 'none';
     if (archBtn) archBtn.style.display = canArchive ? 'block' : 'none';
@@ -824,32 +1134,32 @@ function applyUserUI() {
     document.getElementById('my-name').style.color = userColor;
     const badge = document.getElementById('my-callsign-badge');
     if (badge) badge.innerText = currentCallsign ? ('[' + currentCallsign + ']') : '';
-
-    document.getElementById('admin-zone').style.display = 'block';
-
+    const az = document.getElementById('admin-zone');
+    if (az) az.style.display = 'none';
+    const miniBar = document.getElementById('mini-notif-reply-bar');
+    if (miniBar) miniBar.style.display = 'flex';
+    lastTargetOptionsSig = "";
     applyPermissionsUI();
     populateTargetSelect();
     renderNotificationsWindow();
     renderMapsGrid();
     updateStreamUI();
-
     if (currentUser === ADMIN_NAME) {
-        document.getElementById('clear-history-box').style.display = 'block';
         document.getElementById('admin-maps-upload').style.display = 'block';
         document.getElementById('admin-users-btn').style.display = 'inline-block';
         fetchAdminUsersList();
     } else {
-        document.getElementById('clear-history-box').style.display = 'none';
         document.getElementById('admin-stream-box').style.display = 'none';
         document.getElementById('admin-maps-upload').style.display = 'none';
         document.getElementById('admin-users-btn').style.display = 'none';
     }
     if (typeof syncMessengerAuth === 'function') syncMessengerAuth();
 }
-
 function initApp() {
     runSplash();
     hideAuthMessages();
+    const savedTheme = localStorage.getItem('msb_app_theme') || 'military';
+    setAppTheme(savedTheme, true);
     if (window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true) {
         document.querySelectorAll('.pwa-install-btn').forEach(function(btn) { btn.style.display = 'none'; });
     }
@@ -866,14 +1176,15 @@ function initApp() {
     const regSelect = document.getElementById('reg-unit-select');
     if (loginSelect) loginSelect.innerHTML = '';
     if (regSelect) regSelect.innerHTML = '';
-
     USERS_CONFIG.forEach(function(u, index) {
         let opt = document.createElement('option');
-        opt.value = index; opt.innerText = u.name;
+        opt.value = index;
+        opt.innerText = u.name;
         if (loginSelect) loginSelect.appendChild(opt);
         if (regSelect && u.name !== ADMIN_NAME) {
             let optR = document.createElement('option');
-            optR.value = u.name; optR.innerText = u.name;
+            optR.value = u.name;
+            optR.innerText = u.name;
             regSelect.appendChild(optR);
         }
     });
@@ -884,17 +1195,23 @@ function initApp() {
     headerRow.innerHTML = '<th style="width: 130px;">🕒 Время</th><th style="width: 110px;">👤 Кто</th>';
     if (archHeaderRow) archHeaderRow.innerHTML = '<th style="width: 130px;">🕒 Время</th><th style="width: 110px;">👤 Кто</th>';
     inputContainer.innerHTML = '';
-
     COLUMNS_CONFIG.forEach(function(col, index) {
-        let th = document.createElement('th'); th.innerText = col.label; headerRow.appendChild(th);
-        if (archHeaderRow) { let thA = document.createElement('th'); thA.innerText = col.label; archHeaderRow.appendChild(thA); }
-        let div = document.createElement('div'); div.className = 'field-group';
+        let th = document.createElement('th');
+        th.innerText = col.label;
+        headerRow.appendChild(th);
+        if (archHeaderRow) {
+            let thA = document.createElement('th');
+            thA.innerText = col.label;
+            archHeaderRow.appendChild(thA);
+        }
+        let div = document.createElement('div');
+        div.className = 'field-group';
         let inputHtml = '';
         if (col.options && col.options.length > 0) {
             let opts = col.options.map(function(o) { return '<option>' + o + '</option>'; }).join('');
             inputHtml = '<select id="in-' + index + '"><option value="" disabled selected>-</option>' + opts + '</select>';
         } else if (col.digitsOnly) {
-            inputHtml = '<input type="text" id="in-' + index + '" placeholder="Цифры, дробь..." oninput="this.value = this.value.replace(/[^0-9.,\\/\\\\]/g, \'\')">';
+            inputHtml = '<input type="text" id="in-' + index + '" placeholder="Цифры, дробь, слэш..." oninput="this.value = this.value.replace(/[^0-9.,\\/\\\\]/g, \'\')">';
         } else {
             inputHtml = '<input type="text" id="in-' + index + '" placeholder="...">';
         }
@@ -902,19 +1219,30 @@ function initApp() {
         inputContainer.appendChild(div);
     });
 
+    const cachedRows = loadLocalJournalCache('table_rows', new Array());
+    if (Array.isArray(cachedRows) && cachedRows.length > 0) {
+        document.getElementById('table-body').innerHTML = '';
+        cachedRows.forEach(appendRow);
+    }
+    const cachedNotifs = loadLocalJournalCache('notifs', new Array());
+    if (Array.isArray(cachedNotifs) && cachedNotifs.length > 0) {
+        allNotifications = cachedNotifs;
+    }
+
     const savedUser = localStorage.getItem('journal_user');
     const savedCall = localStorage.getItem('journal_callsign');
     const savedColor = localStorage.getItem('journal_color');
+    const savedPerms = loadLocalJournalCache('my_perms', null);
+    if (savedPerms) myPermissions = savedPerms;
     if (savedUser) {
         currentUser = savedUser;
         currentCallsign = savedCall || savedUser;
         userColor = savedColor || '#fff';
         applyUserUI();
     }
-    connectWS();
+    fetchMapsFromServer();
+    connectWS(false);
 }
-initApp();
-
 function hideAuthMessages() {
     const err = document.getElementById('login-error');
     if (err) err.style.display = 'none';
@@ -959,10 +1287,12 @@ function submitRegistration() {
         }
     });
 }
+
 function refreshMyPermissionsFromServer() {
     if (!currentCallsign) return;
     if (currentUser === ADMIN_NAME) {
         myPermissions = { row: true, stream: true, maps: true, archive: true, table: true };
+        saveLocalJournalCache('my_perms', myPermissions);
         applyPermissionsUI();
         return;
     }
@@ -971,6 +1301,7 @@ function refreshMyPermissionsFromServer() {
         .then(function(data) {
             if (data && data.permissions) {
                 myPermissions = data.permissions;
+                saveLocalJournalCache('my_perms', myPermissions);
                 applyPermissionsUI();
             }
         }).catch(function() {});
@@ -983,25 +1314,22 @@ function attemptLogin() {
     const pass = document.getElementById('login-pass').value.trim();
     const unitObj = USERS_CONFIG.at(userIndex);
     const errEl = document.getElementById('login-error');
-
     if (!unitObj || !pass) {
         errEl.innerText = '❌ Введите пароль!';
         errEl.style.display = 'block';
         return;
     }
-
     if (unitObj.name === ADMIN_NAME && pass === "551150000" && (!callsignInput || callsignInput.toLowerCase() === "муравей")) {
         myPermissions = { row: true, stream: true, maps: true, archive: true, table: true };
+        saveLocalJournalCache('my_perms', myPermissions);
         completeLoginSuccess(ADMIN_NAME, "муравей", unitObj.color);
         return;
     }
-
     if (!callsignInput) {
         errEl.innerText = '❌ Введите ваш Позывной и пароль!';
         errEl.style.display = 'block';
         return;
     }
-
     fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1011,13 +1339,13 @@ function attemptLogin() {
     .then(function(data) {
         if (data.success) {
             myPermissions = data.permissions || { row: false, stream: false, maps: false, archive: false, table: false };
+            saveLocalJournalCache('my_perms', myPermissions);
             completeLoginSuccess(unitObj.name, data.username || callsignInput, unitObj.color);
         } else {
             errEl.innerText = '❌ ' + (data.message || 'Неверный пароль или позывной не одобрен');
             errEl.style.display = 'block';
         }
-    })
-    .catch(function() {
+    }).catch(function() {
         errEl.innerText = '❌ Ошибка связи с сервером';
         errEl.style.display = 'block';
     });
@@ -1051,43 +1379,44 @@ function renderPermCheckboxes(u) {
     const p = u.permissions || { row: false, stream: false, maps: false, archive: false, table: false };
     const k = u.key;
     return '<div class="perm-grid">' +
-        '<label class="perm-chip"><input type="checkbox" ' + (p.row ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'row\', this.checked)"> 📤 Запись в журнал</label>' +
-        '<label class="perm-chip"><input type="checkbox" ' + (p.table ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'table\', this.checked)"> 📊 Таблица журнала</label>' +
-        '<label class="perm-chip"><input type="checkbox" ' + (p.stream ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'stream\', this.checked)"> 🎥 Видеострим</label>' +
-        '<label class="perm-chip"><input type="checkbox" ' + (p.maps ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'maps\', this.checked)"> 🗺️ Вводные/Карта</label>' +
-        '<label class="perm-chip"><input type="checkbox" ' + (p.archive ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'archive\', this.checked)"> 🗂️ Архив</label>' +
-    '</div>';
+        '<label class="perm-chip"><input type="checkbox" ' + (p.row ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'row\', this.checked)"> 📤 Запись</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.table ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'table\', this.checked)"> 📊 Таблица</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.stream ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'stream\', this.checked)"> 🎥 Стрим</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.maps ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'maps\', this.checked)"> 🗺️ Карта</label>' +
+        '<label class="perm-chip"><input type="checkbox" ' + (p.archive ? 'checked' : '') + ' onchange="toggleUserPerm(\'' + k + '\', \'archive\', this.checked)"> 🗂️ Архив</label></div>';
 }
+
 function fetchAdminUsersList() {
     if (currentUser !== ADMIN_NAME) return;
-    fetch('/api/admin/users?t=' + Date.now())
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            const pBox = document.getElementById('admin-pending-list');
-            const aBox = document.getElementById('admin-approved-list');
-            const badge = document.getElementById('pending-count-badge');
-            if (!pBox || !aBox) return;
-            pBox.innerHTML = ''; aBox.innerHTML = '';
-            const pending = data.pending || new Array(), approved = data.approved || new Array();
-            if (badge) { badge.style.display = pending.length > 0 ? 'inline-block' : 'none'; badge.innerText = pending.length; }
-            if (pending.length === 0) pBox.innerHTML = '<div style="color:#64748b;">Нет новых заявок</div>';
-            pending.forEach(function(u) {
-                const row = document.createElement('div');
-                row.className = 'user-row-card';
-                row.innerHTML = '<div style="flex:1;"><div><b>Позывной:</b> <span style="color:#38bdf8;">' + u.username + '</span> | <b>Подр.:</b> ' + u.unit + ' | <b>Пароль:</b> <code style="color:#facc15;">' + u.password + '</code></div>' + renderPermCheckboxes(u) + '</div>' +
-                    '<div style="display:flex; gap:6px;"><button class="lb-btn" style="background:#22c55e;" onclick="adminUserAction(\'' + u.key + '\', \'approve\')">✅ Одобрить</button>' +
-                    '<button class="lb-btn" style="background:#ef4444;" onclick="adminUserAction(\'' + u.key + '\', \'delete\')">❌ Отклонить</button></div>';
-                pBox.appendChild(row);
-            });
-            if (approved.length === 0) aBox.innerHTML = '<div style="color:#64748b;">Пока нет зарегистрированных пользователей</div>';
-            approved.forEach(function(u) {
-                const row = document.createElement('div');
-                row.className = 'user-row-card';
-                row.innerHTML = '<div style="flex:1;"><div><b>' + u.username + '</b> (' + u.unit + ') — Пароль: <code style="color:#4ade80; font-weight:bold;">' + u.password + '</code></div>' + renderPermCheckboxes(u) + '</div>' +
-                    '<button class="lb-btn" style="background:#ef4444; padding:5px 10px;" onclick="adminUserAction(\'' + u.key + '\', \'delete\')">🗑️ Удалить</button>';
-                aBox.appendChild(row);
-            });
+    fetch('/api/admin/users?t=' + Date.now()).then(function(r) { return r.json(); }).then(function(data) {
+        const pBox = document.getElementById('admin-pending-list');
+        const aBox = document.getElementById('admin-approved-list');
+        const badge = document.getElementById('pending-count-badge');
+        if (!pBox || !aBox) return;
+        pBox.innerHTML = '';
+        aBox.innerHTML = '';
+        const pending = data.pending || new Array();
+        const approved = data.approved || new Array();
+        if (badge) {
+            badge.style.display = pending.length > 0 ? 'inline-block' : 'none';
+            badge.innerText = pending.length;
+        }
+        if (pending.length === 0) pBox.innerHTML = '<div style="color:#64748b;">Нет новых заявок</div>';
+        pending.forEach(function(u) {
+            const row = document.createElement('div');
+            row.className = 'user-row-card';
+            row.innerHTML = '<div style="flex:1;"><div><b>Позывной:</b> <span style="color:#38bdf8;">' + u.username + '</span> | <b>Подр.:</b> ' + u.unit + ' | <b>Пароль:</b> <code style="color:#facc15;">' + u.password + '</code></div>' + renderPermCheckboxes(u) + '</div>' +
+                '<div style="display:flex; gap:6px;"><button class="lb-btn" style="background:#22c55e;" onclick="adminUserAction(\'' + u.key + '\', \'approve\')">✅ Одобрить</button><button class="lb-btn" style="background:#ef4444;" onclick="adminUserAction(\'' + u.key + '\', \'delete\')">❌ Отклонить</button></div>';
+            pBox.appendChild(row);
         });
+        if (approved.length === 0) aBox.innerHTML = '<div style="color:#64748b;">Пока нет пользователей</div>';
+        approved.forEach(function(u) {
+            const row = document.createElement('div');
+            row.className = 'user-row-card';
+            row.innerHTML = '<div style="flex:1;"><div><b>' + u.username + '</b> (' + u.unit + ') — Пароль: <code style="color:#4ade80; font-weight:bold;">' + u.password + '</code></div>' + renderPermCheckboxes(u) + '</div><button class="lb-btn" style="background:#ef4444; padding:5px 10px;" onclick="adminUserAction(\'' + u.key + '\', \'delete\')">🗑️ Удалить</button>';
+            aBox.appendChild(row);
+        });
+    }).catch(function() {});
 }
 
 function toggleUserPerm(userKey, permName, val) {
@@ -1111,8 +1440,10 @@ function logoutUser() {
     localStorage.removeItem('journal_callsign');
     localStorage.removeItem('journal_color');
     localStorage.removeItem('chat_username');
+    localStorage.removeItem('msb_jcache_my_perms');
     location.reload();
 }
+
 function loginAsViewer() {
     unlockMobileFeatures();
     document.getElementById('login-overlay').style.display = 'none';
@@ -1122,77 +1453,116 @@ function loginAsViewer() {
     subscribeToWebPush();
     checkAndShowAlerts(false);
 }
-
 function sendAdminAlert() {
     if (!currentUser) return;
     const target = document.getElementById('admin-target').value;
-    if (!target) return alert("Сначала добавьте друга в Мессенджере!");
     const msg = document.getElementById('admin-msg').value.trim();
-    if (!msg) return alert("Напишите текст!");
+    if (!target || !msg) return alert("Заполните получателя и текст!");
     const senderLabel = (currentCallsign && currentCallsign !== currentUser) ? (currentUser + ' (' + currentCallsign + ')') : currentUser;
-    ws.send(JSON.stringify({
-        type: 'admin_alert',
-        sender: senderLabel,
-        color: userColor,
-        time: getStaticDateTime(),
-        target: target,
-        text: msg
-    }));
+    ws.send(JSON.stringify({ type: 'admin_alert', sender: senderLabel, color: userColor, time: getStaticDateTime(), target: target, text: msg }));
     document.getElementById('admin-msg').value = '';
 }
 
+function sendMiniNotification() {
+    if (!currentUser) return alert("Войдите в систему!");
+    const target = document.getElementById('mini-notif-target').value;
+    const input = document.getElementById('mini-notif-input');
+    const msg = input.value.trim();
+    if (!target || !msg) return;
+    const senderLabel = (currentCallsign && currentCallsign !== currentUser) ? (currentUser + ' (' + currentCallsign + ')') : currentUser;
+    ws.send(JSON.stringify({ type: 'admin_alert', sender: senderLabel, color: userColor, time: getStaticDateTime(), target: target, text: msg }));
+    input.value = '';
+}
+
 function clearHistoryAdmin() {
-    if (currentUser !== ADMIN_NAME) return;
-    if (confirm("⚠️ Вы уверены, что хотите ПОЛНОСТЬЮ очистить текущий журнал событий у всех участников?")) {
+    if (currentUser === ADMIN_NAME && confirm("⚠️ Очистить текущий журнал событий у всех?")) {
         ws.send(JSON.stringify({ type: 'clear_history' }));
     }
 }
 
+function sendLocalNotification(target, text, sender, notifId) {
+    const fromWho = sender || 'АДМИН';
+    const title = '🛑 ТРЕВОГА ДЛЯ [' + target + ']!';
+    const body = fromWho + ': ' + text;
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.ready.then(function(reg) {
+            reg.showNotification(title, {
+                body: body,
+                icon: '/icon-192.png',
+                badge: '/icon-192.png',
+                vibrate: Array.of(800, 200, 800, 200, 1000),
+                silent: false,
+                requireInteraction: true,
+                renotify: true,
+                tag: 'msb-alert-' + (notifId || Date.now())
+            }).catch(function() {});
+        });
+    }
+}
+
 function isUnreadForMe(a) {
-    const me = currentCallsign || currentUser || 'Просмотр';
-    if (currentUser && (a.sender === currentUser || a.sender === currentCallsign)) return false;
-    if (Array.isArray(a.readList) && (a.readList.indexOf(me) !== -1 || a.readList.indexOf(currentUser) !== -1)) return false;
+    const myCall = String(currentCallsign || '').trim().toLowerCase();
+    const myUnit = String(currentUser || '').trim().toLowerCase();
+    const sLow = String(a.sender || '').trim().toLowerCase();
+    if (myCall && (sLow === myCall || sLow.indexOf('(' + myCall + ')') !== -1)) return false;
+    if (!myCall && myUnit && sLow === myUnit) return false;
+    if (Array.isArray(a.readList)) {
+        const alreadyRead = a.readList.some(function(r) {
+            const rLow = String(r || '').trim().toLowerCase();
+            return (myCall && rLow === myCall) || (myUnit && rLow === myUnit);
+        });
+        if (alreadyRead) return false;
+    }
     return true;
 }
 
 function checkAndShowAlerts(isNew) {
     if (document.getElementById('alert-modal').style.display === 'flex' && !isNew) return;
-    let targetToShow = null, alertObj = null;
+    let targetToShow = null;
+    let alertObj = null;
     if (currentCallsign) {
-        const callQueue = getAlertsQueue(currentCallsign).filter(isUnreadForMe);
-        if (callQueue.length > 0) { targetToShow = currentCallsign; alertObj = callQueue.at(0); }
+        const q = getAlertsQueue(currentCallsign).filter(isUnreadForMe);
+        if (q.length > 0) { targetToShow = currentCallsign; alertObj = q.at(0); }
     }
     if (!targetToShow && currentUser) {
-        const myQueue = getAlertsQueue(currentUser).filter(isUnreadForMe);
-        if (myQueue.length > 0) { targetToShow = currentUser; alertObj = myQueue.at(0); }
+        const q = getAlertsQueue(currentUser).filter(isUnreadForMe);
+        if (q.length > 0) { targetToShow = currentUser; alertObj = q.at(0); }
     }
     if (!targetToShow) {
-        const allQueue = getAlertsQueue("ВСЕМ").filter(isUnreadForMe);
-        if (allQueue.length > 0) { targetToShow = "ВСЕМ"; alertObj = allQueue.at(0); }
+        const q = getAlertsQueue("ВСЕМ").filter(isUnreadForMe);
+        if (q.length > 0) { targetToShow = "ВСЕМ"; alertObj = q.at(0); }
     }
-    if (targetToShow && alertObj) showAlert(targetToShow, alertObj.text, alertObj.sender, alertObj.id, isNew);
+    if (targetToShow && alertObj) {
+        showAlert(targetToShow, alertObj.text, alertObj.sender, alertObj.id, isNew);
+    }
 }
 
 function showAlert(target, text, sender, notifId, isNew) {
-    currentAlertId = notifId || null; currentAlertTarget = target; currentAlertText = text; currentAlertSender = sender || ADMIN_NAME;
+    currentAlertId = notifId || null;
+    currentAlertTarget = target;
+    currentAlertText = text;
+    currentAlertSender = sender || ADMIN_NAME;
     const queueLen = getAlertsQueue(target).filter(isUnreadForMe).length;
-    const countBadge = queueLen > 1 ? ' (1 из ' + queueLen + ')' : '';
-    document.getElementById('alert-target-label').innerText = 'ДЛЯ [' + target + '] ОТ [' + currentAlertSender + ']' + countBadge + ':';
+    document.getElementById('alert-target-label').innerText = 'ДЛЯ [' + target + '] ОТ [' + currentAlertSender + ']' + (queueLen > 1 ? ' (1 из ' + queueLen + ')' : '') + ':';
     document.getElementById('alert-text').innerText = text;
     document.getElementById('alert-modal').style.display = 'flex';
-    updateLockScreenAlert(target, text, currentAlertSender);
-    if (isNew || document.visibilityState === 'hidden') sendLocalNotification(target, text, currentAlertSender);
+    if (isNew || document.visibilityState === 'hidden') {
+        sendLocalNotification(target, text, currentAlertSender, currentAlertId);
+    }
     if (!titleInterval) {
         let flag = false;
-        titleInterval = setInterval(function() { document.title = flag ? "🛑 ТРЕВОГА! СООБЩЕНИЕ!" : "⚠️ ПРОЧИТАЙТЕ СООБЩЕНИЕ!"; flag = !flag; }, 600);
+        titleInterval = setInterval(function() {
+            document.title = flag ? "🛑 ТРЕВОГА!" : "⚠️ СООБЩЕНИЕ!";
+            flag = !flag;
+        }, 600);
     }
     playBeep();
     if (!soundInterval) soundInterval = setInterval(playBeep, 2000);
 }
-
 function stopAlertVisuals() {
     document.getElementById('alert-modal').style.display = 'none';
-    currentAlertId = null; currentAlertTarget = "";
+    currentAlertId = null;
+    currentAlertTarget = "";
     if (titleInterval) { clearInterval(titleInterval); titleInterval = null; }
     if (soundInterval) { clearInterval(soundInterval); soundInterval = null; }
     if (sirenAudio) { sirenAudio.pause(); sirenAudio.currentTime = 0; }
@@ -1204,10 +1574,18 @@ function confirmAlert() {
     unlockMobileFeatures();
     const whoConfirmed = currentCallsign || currentUser || 'Просмотр';
     const readTime = new Date().toLocaleTimeString().slice(0, 5);
-    const targetToClear = currentAlertTarget, idToClear = currentAlertId;
+    const targetToClear = currentAlertTarget;
+    const idToClear = currentAlertId;
+    const alertTextCopy = String(currentAlertText || '');
+    const alertSenderCopy = String(currentAlertSender || '');
     stopAlertVisuals();
-    if (targetToClear) {
+    if (targetToClear && ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'clear_alert', target: targetToClear, notifId: idToClear, readBy: whoConfirmed, readTime: readTime }));
+    }
+    const isFromMessenger = alertTextCopy.indexOf('👥') === 0 || alertTextCopy.indexOf('💬') === 0 || alertTextCopy.indexOf('🎙️') === 0 || alertTextCopy.indexOf('🎥') === 0 || alertTextCopy.indexOf('📎') === 0 || alertTextCopy.indexOf('🎬') === 0;
+    if (isFromMessenger && typeof openMessengerWindow === 'function') {
+        openMessengerWindow(alertSenderCopy);
+        return;
     }
     checkAndShowAlerts(false);
 }
@@ -1231,16 +1609,196 @@ function submitRow() {
 function appendRow(row) {
     if (row.values && row.values.at(0)) {
         const firstCol = String(row.values.at(0));
-        if (firstCol.indexOf("ОЗНАКОМЛЕН") !== -1 || firstCol.indexOf("УВЕДОМЛЕНИЕ") !== -1) return;
+        if (firstCol.indexOf("ОЗНАКОМЛЕН") !== -1 || firstCol.indexOf("УВЕДОМЛЕН") !== -1) return;
     }
     const tbody = document.getElementById('table-body');
     const tr = document.createElement('tr');
-    let html = '<td class="time-cell">' + row.time + '</td><td class="user-cell" style="color: ' + row.color + '">' + row.user + '</td>';
+    let html = '<td class="time-cell">' + row.time + '</td><td class="user-cell" style="color:' + row.color + '">' + row.user + '</td>';
     for (let i = 0; i < COLUMNS_CONFIG.length; i++) {
-        const val = (row.values && row.values.at(i) !== undefined) ? row.values.at(i) : '-';
-        html += '<td>' + (val || '-') + '</td>';
+        html += '<td>' + ((row.values && row.values.at(i)) ? row.values.at(i) : '-') + '</td>';
     }
     tr.innerHTML = html;
     tbody.appendChild(tr);
     requestAnimationFrame(function() { tr.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
 }
+
+function triggerCallInDev(callType, targetName) {
+    playSoundById('nice2', true);
+    const modal = document.getElementById('call-dev-modal');
+    const icon = document.getElementById('call-dev-icon');
+    const title = document.getElementById('call-dev-title');
+    const text = document.getElementById('call-dev-text');
+    if (icon) icon.innerText = (callType === 'Видеозвонок') ? '🎥' : '📞';
+    if (title) title.innerText = callType + (targetName ? (' [' + targetName + ']') : '') + ' — МСБ-55115';
+    if (text) text.innerHTML = 'Модуль <b>«' + callType + '»</b> в разработке системы <b>МСБ-55115</b>!';
+    if (modal) modal.style.display = 'flex';
+}
+
+function closeCallDevModal() {
+    const m = document.getElementById('call-dev-modal');
+    if (m) m.style.display = 'none';
+}
+const GIF_TITLES = {
+    military: Array.of(
+        "🪖 Спецназ МСБ", "🛡️ Броня крепка", "🚁 Вертушка", "📡 Радар ПВО",
+        "🎯 Снайпер", "🟩 ПНВ Разведка", "🚜 Танковый прорыв", "⚡ Штурм",
+        "🎖️ Отвага", "📻 Радиосвязь", "🔥 Артиллерия", "🛩️ Су-57 в небе",
+        "🧭 Маршрут", "💣 Саперы", "🐕 Дозор", "🚢 Флот",
+        "🚁 Десант", "🛡️ Оборона", "🎆 Салют Победы", "🏆 МСБ-55115"
+    ),
+    rocket: Array.of(
+        "🚀 Пуск из шахты", "🔥 Гиперзвук", "⚡ Тополь-М", "💥 Перехват ПВО",
+        "🛰️ Баллистика", "🚀 РВСН Дежурство", "🌋 Огненный старт", "🎯 Точно в цель",
+        "🚀 Комплекс Ярс", "🧭 Телеметрия", "🔥 Форсаж", "🛡️ Купол С-400",
+        "⚡ Удар с неба", "🚀 Залп РСЗО", "🛰️ Орбитальный блок", "🔥 Плазма",
+        "🚀 Калибр", "⏱️ Пуск 3..2..1", "💥 Ударная волна", "🚀 Щит МСБ"
+    ),
+    cosmic: Array.of(
+        "🌌 Глубокий космос", "🛰️ Станция МКС", "👨‍🚀 Космонавт", "🌟 Сверхновая",
+        "🛸 Варп-прыжок", "🪐 Сатурн", "☄️ Метеориты", "🌌 Андромеда",
+        "🛰️ Спутник ВКС", "🌑 Лунная база", "⚡ Солнечный шторм", "🕳️ Черная дыра",
+        "🚀 Стыковка", "🌠 Звездный флот", "🪐 Марс", "🛰️ Лазерная орбита",
+        "🌌 Галактика", "👨‍🚀 Невесомость", "🌟 Пульсар", "🌌 Космос МСБ"
+    )
+};
+
+var gifCacheStore = {};
+
+function makeAnimatedSvgGif(cat, idx, title) {
+    const cacheKey = cat + '_' + idx;
+    if (gifCacheStore[cacheKey]) return gifCacheStore[cacheKey];
+    const palettes = {
+        military: Array.of('#051f10', '#14532d', '#22c55e', '#facc15'),
+        rocket: Array.of('#260804', '#7c2d12', '#f97316', '#fde047'),
+        cosmic: Array.of('#090422', '#3b0764', '#38bdf8', '#c084fc')
+    };
+    const pal = palettes[cat] || palettes.military;
+    const parts = String(title || '').split(' ');
+    const icon = parts.at(0) || '🚀';
+    const label = parts.slice(1).join(' ') || 'МСБ-55115';
+    const canvas = document.createElement('canvas');
+    canvas.width = 320; canvas.height = 200;
+    const ctx = canvas.getContext('2d');
+    const grad = ctx.createLinearGradient(0, 0, 320, 200);
+    grad.addColorStop(0, pal.at(0)); grad.addColorStop(1, pal.at(1));
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, 320, 200);
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 1;
+    for (let x = 20; x < 320; x += 28) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 200); ctx.stroke(); }
+    for (let y = 20; y < 200; y += 28) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(320, y); ctx.stroke(); }
+    ctx.strokeStyle = pal.at(2); ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.arc(160, 78, 52, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = pal.at(3); ctx.lineWidth = 2; ctx.setLineDash(Array.of(8, 6));
+    ctx.beginPath(); ctx.arc(160, 78, 36, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash(new Array());
+    ctx.font = '46px "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(icon, 160, 78);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.78)'; ctx.fillRect(14, 144, 292, 42);
+    ctx.strokeStyle = pal.at(2); ctx.lineWidth = 1.5; ctx.strokeRect(14, 144, 292, 42);
+    ctx.fillStyle = '#ffffff'; ctx.font = 'bold 15px "Segoe UI", monospace, sans-serif';
+    ctx.fillText(label + ' #' + (idx + 1), 160, 166);
+    const dataUrl = canvas.toDataURL('image/png');
+    gifCacheStore[cacheKey] = dataUrl;
+    return dataUrl;
+}
+
+function setAppTheme(themeName) {
+    const clean = (themeName === 'rocket' || themeName === 'cosmic') ? themeName : 'military';
+    document.body.classList.remove('theme-military', 'theme-rocket', 'theme-cosmic');
+    document.body.classList.add('theme-' + clean);
+    localStorage.setItem('msb_app_theme', clean);
+    Array.of('military', 'rocket', 'cosmic').forEach(function(t) {
+        const b = document.getElementById('theme-btn-' + t);
+        if (b) b.classList.toggle('active', t === clean);
+    });
+}
+
+function toggleChatGifDrawer() {
+    const drawer = document.getElementById('chat-gif-drawer');
+    if (!drawer) { openThemeSettingsModal(); return; }
+    if (drawer.style.display === 'none' || !drawer.style.display) {
+        drawer.style.display = 'flex';
+        switchGifCategory(currentGifCategory || 'military');
+    } else {
+        drawer.style.display = 'none';
+    }
+}
+
+function switchGifCategory(cat) {
+    currentGifCategory = (cat === 'rocket' || cat === 'cosmic') ? cat : 'military';
+    Array.of('military', 'rocket', 'cosmic').forEach(function(t) {
+        const tab = document.getElementById('gif-tab-' + t);
+        if (tab) tab.classList.toggle('active', t === currentGifCategory);
+    });
+    const grid = document.getElementById('chat-gifs-grid') || document.getElementById('viewer-gifs-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+    const titles = GIF_TITLES[currentGifCategory] || GIF_TITLES.military;
+    titles.forEach(function(title, idx) {
+        const src = makeAnimatedSvgGif(currentGifCategory, idx, title);
+        const card = document.createElement('div'); card.className = 'gif-card-item';
+        const imgEl = document.createElement('img'); imgEl.src = src; imgEl.alt = title;
+        const capEl = document.createElement('div'); capEl.className = 'gif-card-title'; capEl.innerText = title;
+        card.appendChild(imgEl); card.appendChild(capEl);
+        card.onclick = function() { sendGifToCurrentChat(src, title); };
+        grid.appendChild(card);
+    });
+}
+
+function sendGifToCurrentChat(gifSrc) {
+    if (typeof currentRoomId === 'undefined' || !currentRoomId) {
+        alert('Сначала выберите друга или конференцию слева, чтобы отправить гифку!');
+        return;
+    }
+    const sender = (typeof getActiveChatIdentity === 'function') ? getActiveChatIdentity() : currentCallsign;
+    if (!sender) return;
+    fetch(gifSrc).then(function(r) { return r.blob(); }).then(function(blob) {
+        const formData = new FormData();
+        formData.append('sender', sender); formData.append('room', currentRoomId);
+        formData.append('type', 'file'); formData.append('media', blob, 'gif_' + Date.now() + '.png');
+        return fetch('/api/send', { method: 'POST', body: formData });
+    }).then(function() {
+        const drawer = document.getElementById('chat-gif-drawer');
+        if (drawer) drawer.style.display = 'none';
+        closeMsgPhotoViewer();
+        if (typeof fetchMessages === 'function') { lastMessagesCount = -1; fetchMessages(); }
+    });
+}
+
+function openMsgPhotoViewer(src, title) {
+    const modal = document.getElementById('msg-photo-viewer-modal');
+    const img = document.getElementById('msg-viewer-img');
+    const ttl = document.getElementById('msg-viewer-title');
+    msgImageZoom = 1;
+    if (img) { img.src = src || makeAnimatedSvgGif('military', 0, '🪖 МСБ-55115'); img.style.transform = 'scale(1)'; }
+    if (ttl) ttl.innerText = title || '🖼️ Просмотр и настройки темы';
+    const zLbl = document.getElementById('msg-zoom-label');
+    if (zLbl) zLbl.innerText = '100%';
+    setAppTheme(localStorage.getItem('msb_app_theme') || 'military');
+    if (modal) modal.style.display = 'flex';
+}
+
+function openAvatarInViewer(el, titleName) {
+    const imgEl = el ? el.querySelector('img') : null;
+    const fallback = makeAnimatedSvgGif(localStorage.getItem('msb_app_theme') || 'military', 0, '🎖️ ' + (titleName || currentCallsign || 'МСБ'));
+    openMsgPhotoViewer(imgEl ? imgEl.src : fallback, '👤 Профиль: ' + (titleName || currentCallsign || 'Боец МСБ-55115'));
+}
+
+function openThemeSettingsModal() {
+    const preview = makeAnimatedSvgGif(localStorage.getItem('msb_app_theme') || 'military', 19, '🎨 Тема МСБ-55115');
+    openMsgPhotoViewer(preview, '🎨 Выбор темы оформления (Военный / Ракетный / Космос)');
+}
+window.openThemeAndGifHub = openThemeSettingsModal;
+
+function closeMsgPhotoViewer() {
+    const m = document.getElementById('msg-photo-viewer-modal');
+    if (m) m.style.display = 'none';
+}
+
+function changeMsgImageZoom(delta) {
+    msgImageZoom = Math.min(4, Math.max(0.5, msgImageZoom + delta));
+    const img = document.getElementById('msg-viewer-img');
+    const lbl = document.getElementById('msg-zoom-label');
+    if (img) img.style.transform = 'scale(' + msgImageZoom + ')';
+    if (lbl) lbl.innerText = Math.round(msgImageZoom * 100) + '%';
+}
+
+initApp();
