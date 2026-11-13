@@ -836,7 +836,7 @@ const server = http.createServer(function(req, res) {
             'Content-Type': 'application/json; charset=utf-8',
             'Cache-Control': 'no-cache'
         });
-        let partnerOnline = false;
+                let partnerOnline = false;
         let otherParticipants = new Array();
         if (room) {
             if (groupsDB[room] && Array.isArray(groupsDB[room].members)) {
