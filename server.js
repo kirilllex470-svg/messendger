@@ -878,7 +878,24 @@ const server = http.createServer(function(req, res) {
             partnerOnline: partnerOnline
         }));
     }
+       let typingUsers = [];
+        if (room && otherParticipants.length > 0) {
+            otherParticipants.forEach(function(part) {
+                const tStamp = typingDB[room + '|' + part] || 0;
+                if (Date.now() - tStamp < 4000) {
+                    const origName = (usersDB[part] && usersDB[part].username) ? usersDB[part].username : part;
+                    typingUsers.push(origName);
+                }
+            });
+        }
 
+        return res.end(JSON.stringify({
+            messages: enriched,
+            partnerOnline: partnerOnline,
+            partnerTyping: typingUsers.length > 0,
+            typingUsers: typingUsers
+        }));
+    } 
     if (urlPath === '/api/messages/read' && req.method === 'POST') {
         return readBodyJSON(req, function(err, data) {
             if (!err && data && data.user && data.room) {
