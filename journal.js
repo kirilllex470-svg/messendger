@@ -272,9 +272,11 @@ function playToneNotes(notes, waveType) {
             osc.frequency.setValueAtTime(n.f, now + n.t);
             if (n.fEnd) osc.frequency.exponentialRampToValueAtTime(n.fEnd, now + n.t + n.d);
             gain.gain.setValueAtTime(0.001, now + n.t);
+            gain.gain.setValueAtTime(0.001, now + n.t);
             gain.gain.linearRampToValueAtTime(n.v || 0.35, now + n.t + 0.02);
-            gain.gain.exponentialRampToValueAtTime(n.001 || 0.001, now + n.t + n.d);
+            gain.gain.exponentialRampToValueAtTime(0.001, now + n.t + n.d);
             osc.connect(gain);
+
             gain.connect(audioCtx.destination);
             osc.start(now + n.t);
             osc.stop(now + n.t + n.d + 0.02);
